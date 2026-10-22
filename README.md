@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Automatically set up a right-sized, verifiable AI coding workflow for your project.
+Automatically set up a right-sized, verifiable coding workflow for your agent.
 
 **v0.1.0 · Prototype**
 
