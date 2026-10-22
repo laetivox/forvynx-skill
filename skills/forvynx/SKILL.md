@@ -1,6 +1,6 @@
 ---
 name: forvynx
-description: "Bootstrap or adjust an AI coding workflow for software development: inspect workspace and Git boundaries, preview repository onboarding, and verify generated components. Bypass ordinary translation, writing, and non-development tasks."
+description: "Portable bootstrap workflow for coding agents: inspect workspace and Git boundaries, preview repository onboarding, establish an adaptive development workflow, and verify generated components. Bypass ordinary translation, writing, and non-development tasks."
 ---
 
 # Forvynx
@@ -8,6 +8,11 @@ description: "Bootstrap or adjust an AI coding workflow for software development
 Establish only the workflow the current engineering task needs. Use the bundled
 controller for deterministic boundary, drift, and verification checks; do not
 replace those checks with a statement that you followed these instructions.
+
+This is an agent-neutral Skill. Load it using the host's Skill mechanism or by
+reading this file. It needs repository file access, Python 3.11+, and Git for the
+controller workflow; no vendor API or SDK is required. `agents/openai.yaml` is
+optional host presentation metadata and may be ignored or omitted by other agents.
 
 ## Route the request
 
@@ -20,9 +25,10 @@ replace those checks with a statement that you followed these instructions.
   criteria before substantial implementation. Existing user approval remains valid.
 - Workflow setup or explicit onboarding: use the procedure below.
 
-An installed Skill can be selected implicitly, but cannot guarantee interception
-of every conversation. Explicit `$forvynx` is also supported. If the user declines
-onboarding, continue the original authorized task under existing conventions.
+Use the host's supported activation and approval mechanisms. Hosts with a
+`$skill-name` convention may use `$forvynx`; other hosts can load Forvynx by name
+or path. Automatic selection depends on the host. If the user declines onboarding,
+continue the original authorized task under existing conventions.
 
 ## Discover, preview, confirm, apply, verify
 
@@ -32,6 +38,9 @@ skill). The controller uses only the standard library and local Git. Read
 
 1. Determine the user-selected workspace and applicable instructions. A workspace
    may have no Git repository or contain multiple independent repositories.
+   Generated `AGENTS.md` is a default project entry, not a universal auto-loading
+   assumption. When the host does not read it automatically, explicitly read the
+   relevant checkout's `.forvynx/workflow.md` before following that workflow.
 2. Run `probe` only for development/setup work. Report incomplete discovery and
    errors honestly. Never initialize Git, follow external links, run repository
    scripts, or install dependencies during discovery.

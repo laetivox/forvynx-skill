@@ -1,15 +1,15 @@
-# Forvynx v0.1：Codex 接续提示词
+# Forvynx v0.1：Agent 接续提示词
 
 当前状态：用户已允许按推荐默认值继续；v0.1 本地原型与测试已落盘，尚未安装到用户级目录或接入真实目标仓库。  
 配套设计：`docs/forvynx-v0.1-design.md`。如果换到不能访问原文件的新会话，请同时附上该设计文档；下文也保留了主要约束。
 
-以下提示词可以直接粘贴到具备本地项目读写能力的 Codex/Work 会话。继承已有设计授权；它不会把粘贴行为当成额外的安装或仓库接入批准。
+以下提示词可以直接交给具备本地项目读写和命令执行能力的 Agent。继承已有设计授权；它不会把粘贴行为当成额外的安装或仓库接入批准。
 
 ---
 
 请继续 Forvynx 项目。先检查当前可用工作区、适用的 AGENTS.md 和已有改动；读取 docs/forvynx-v0.1-design.md 与 docs/implementation-status.md。用户已授权没有阻塞决策时按推荐方案推进，无须再次请求相同设计批准。不要假设能恢复“推荐AI项目”旧会话的完整助手正文。
 
-背景：Forvynx 是一个 bootstrap Skill，识别开发意图，检查工作区/Git 边界，经明确确认接入仓库或安装，依据已有工程证据生成适量 AI 编码工作流，并验证生成组件。用户偏好先达成设计共识，再展开大规模代码。
+背景：Forvynx 是通用的 Agent Skill，按 Agent Skills 的目录约定分发，供支持该格式或能显式加载其指令的 Agent 使用。核心只依赖 Python/Git 和工程文件访问，不绑定 Codex 或厂商 API；agents/openai.yaml 是可选展示元数据。它识别开发意图，检查工作区/Git 边界，经明确确认接入仓库或安装，依据已有工程证据生成适量 AI 编码工作流，并验证生成组件。用户偏好先达成设计共识，再展开大规模代码。
 
 项目目录是 C:\Users\sskj-work\Documents\ChatGPT\forvynx.skill。用户已明确要求创建仓库，现已初始化本地 Git（main），远程地址待用户提供，尚未推送。已有 README.md、skills/forvynx（Skill 与标准库控制器）、tests、开发脚本、可选 CI 配置与 dist 分发包。当前具体内容请重新检查。没有授权安装到用户级目录、接入邻近真实项目、改全局配置或远端规则。
 
@@ -24,6 +24,7 @@
 7. 默认生成物仅为接入索引、仓库配置、简短 workflow、AGENTS 入口和固定模板的 checker。按需添加本地 Git hook 或 CI，不能生成一堆未使用的 Skill 或强加 DDD/TDD/多代理。
 8. 固定模板也需要独立验证。分别报告结构、一致性、行为和工程检查，状态包含 passed/failed/not_run/unsupported；必需项没运行不能算通过。Plan 绑定精确写入载荷、前后状态及命令来源，执行使用 verify --plan <json> --execute <check-ids>；核对真实命令定义和授权，参数数组运行，避免拼 shell。产品 verifier 对照批准计划和产品模板清单；便携 checker 仅验证快照中的配置/引用/检查，不证明人类批准。本地 hook 用安装时绑定的 checker 检查暂存快照，CI 检查 checkout 快照。
 9. 普通 Skill 自动匹配不是全局拦截。本地 hook 可跳过；CI YAML 已生成不代表执行或远端必需检查已生效。v0.1 不做全局宿主拦截器，也不自动改远端保护。
+10. 安装目录、激活语法、自动匹配与工具权限由目标 Agent 决定，不能假定所有宿主使用 $forvynx 或自动读取 AGENTS.md。需要时通过 Skill 显式读取对应仓库的 .forvynx/workflow.md。
 
 推荐首版技术取舍（仍以用户确认设计为准）：Python 3.11+ 标准库 + Git，Windows 优先并做 Linux CI；一个 Skill、probe/plan/apply/verify 控制器、通用回退和 Python 适配器。CI 中检查器随目标仓库版本化，不依赖用户本地 Skill 安装。
 

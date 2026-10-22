@@ -28,19 +28,21 @@ def validate(root=None):
         raise ValueError("Invalid Skill description")
     if re.search(r"\[TODO:[^\n]*\]", content):
         raise ValueError("Unfinished scaffold")
-    interface = {}
-    lines = (root / "agents/openai.yaml").read_text(encoding="utf-8").splitlines()
-    if not lines or lines[0] != "interface:":
-        raise ValueError("Expected restricted interface metadata")
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        match = re.fullmatch(r"  (display_name|short_description): (\".*\")", line)
-        if not match or match[1] in interface:
-            raise ValueError("Unsupported/duplicate interface field")
-        interface[match[1]] = json.loads(match[2])
-    if set(interface) != {"display_name", "short_description"} or not 25 <= len(interface["short_description"]) <= 64:
-        raise ValueError("Invalid UI metadata")
+    ui_path = root / "agents/openai.yaml"
+    if ui_path.exists():
+        interface = {}
+        lines = ui_path.read_text(encoding="utf-8").splitlines()
+        if not lines or lines[0] != "interface:":
+            raise ValueError("Expected restricted interface metadata")
+        for line in lines[1:]:
+            if not line.strip():
+                continue
+            match = re.fullmatch(r"  (display_name|short_description): (\".*\")", line)
+            if not match or match[1] in interface:
+                raise ValueError("Unsupported/duplicate interface field")
+            interface[match[1]] = json.loads(match[2])
+        if set(interface) != {"display_name", "short_description"} or not 25 <= len(interface["short_description"]) <= 64:
+            raise ValueError("Invalid UI metadata")
     for document in [root / "SKILL.md", *(root / "references").glob("*.md")]:
         for link in re.findall(r"\[[^\]]+\]\(([^)]+)\)", document.read_text(encoding="utf-8")):
             if "://" in link:
@@ -52,7 +54,7 @@ def validate(root=None):
     files = sorted(root.rglob("*.py"))
     for source in files:
         ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    return {"status": "passed", "validator": "stdlib-restricted-package-format", "name": fields["name"], "python_files": len(files)}
+    return {"status": "passed", "validator": "stdlib-restricted-package-format", "name": fields["name"], "python_files": len(files), "optional_openai_metadata": ui_path.exists()}
 
 
 if __name__ == "__main__":

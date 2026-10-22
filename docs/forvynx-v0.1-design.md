@@ -2,7 +2,7 @@
 
 状态：用户已授权按推荐默认方案继续，v0.1 本地原型已实现；真实安装/仓库接入未执行。  
 日期：2026-10-22（Asia/Shanghai）  
-定位：为当前工程建立适量、可验证的 AI 编码协作流程的 bootstrap Skill。
+定位：为当前工程建立适量、可验证的 AI 编码协作流程的通用 Agent Skill，不绑定单一编码宿主。
 
 ## 1. 本次接续的事实与范围
 
@@ -23,6 +23,7 @@ Forvynx 的核心过程是：**识别任务 → 只读发现 → 提议适量流
 ### v0.1 包含
 
 - 一个可显式调用、可被宿主自动匹配的 `forvynx` Skill。
+- 遵循 Agent Skills 目录约定，核心指令与控制器跨宿主复用；厂商展示元数据可选，安装和触发沿用目标 Agent 的机制。
 - 区分工作区、Git 仓库、仓库中的模块；支持非 Git 父目录下的多个仓库。
 - 有边界的只读探测、可审阅计划、批准范围核对、幂等应用、漂移检测、条件回滚。
 - 依据现有工程证据生成最小工作流，保留用户已有约定。
@@ -31,13 +32,13 @@ Forvynx 的核心过程是：**识别任务 → 只读发现 → 提议适量流
 
 ### v0.1 不包含
 
-常驻代理、独立模型 API 服务、跨所有聊天的全局拦截、自动发布、自动管理远端保护、通用 shell 安全解析器、多种编码宿主全面适配、自动生成大量子 Skill。首版不默认引入 DDD、TDD、多代理或长文档体系；已有项目明确要求时沿用。
+常驻代理、独立模型 API 服务、跨所有聊天的全局拦截、自动发布、自动管理远端保护、通用 shell 安全解析器、各编码宿主的专用安装器或全套触发适配、自动生成大量子 Skill。通用 Skill 的使用不限于 Codex；首版不要求实现每个宿主的专用集成。首版不默认引入 DDD、TDD、多代理或长文档体系；已有项目明确要求时沿用。
 
 建议实现语言为 Python 3.11+，核心只用标准库，Git 作为外部能力。这是待确认的工程取舍，不是已检测到的项目技术栈。首版只做通用回退与 Python 工程适配器；其他栈可读取证据并给建议，不伪称已支持自动执行。
 
 ## 3. 触发与轻量分流
 
-Skill 的名称和描述用于宿主选择，完整指令按需加载；自动匹配并不保证每个请求都触发。[官方 Skill 说明](https://developers.openai.com/plugins/concepts/skills)
+Skill 的名称和描述用于宿主选择，完整指令及辅助资源按需加载；自动匹配由具体宿主实现，不保证每个请求都触发。[Agent Skills 规范](https://agentskills.io/specification)
 
 建议描述：
 
@@ -142,10 +143,10 @@ Skill 负责语义判断、设计建议和交互；确定性控制器负责事�
 ```text
 docs/
   forvynx-v0.1-design.md
-  codex-handoff.md
+  agent-handoff.md
 skills/forvynx/
   SKILL.md
-  agents/openai.yaml
+  agents/openai.yaml      可选宿主展示元数据
   references/workflow.md
   scripts/forvynx.py
   scripts/forvynx_lib/
@@ -225,7 +226,7 @@ Skill 保持精简，按需链接参考；没有实际用途的模板、目录�
 | `<repo>/.github/workflows/forvynx.yml` | 仅在选择 GitHub Actions 且已确认时生成；不覆盖原流水线 |
 | 本地 Git hook 集成 | 可选，单独列出安装位置、当前 hooks 配置、冲突和恢复方法 |
 
-不在非 Git 工作区父目录写一个庞大 `AGENTS.md` 并假定子仓都会读取；每个接入仓库有明确入口。已有更深层规则继续适用。托管块用唯一边界标记，非托管文字逐字保留；标记缺损、重复或同名自有文件不直接覆盖。
+不在非 Git 工作区父目录写一个庞大 `AGENTS.md` 并假定子仓都会读取；每个接入仓库有明确入口。`AGENTS.md` 是默认工程入口约定；宿主不自动读取它时，由 Skill 显式读取对应的 `.forvynx/workflow.md`。已有更深层规则继续适用。托管块用唯一边界标记，非托管文字逐字保留；标记缺损、重复或同名自有文件不直接覆盖。
 
 目标仓库中的 checker 和配置随仓库版本化，CI 不依赖用户机器上安装的 Skill。个人绝对路径和接入授权不进 CI；CI 验证当前 checkout 的便携配置。检查器版本与来源摘要写入组件清单，并由产品测试中的独立预期验证，而不是仅让生成器证明自己正确。
 
@@ -279,9 +280,9 @@ CI 首版提供可选 GitHub Actions 模板及通用检查命令。使用当前�
 
 CI 中的检查器也可能在同一 PR 被修改。v0.1 定位为协作质量门禁，不承诺抵抗恶意贡献者；更强保证需要受保护的检查来源与远端规则。不能让检查器仅凭可编辑的 `approved` 文件断言“设计已获人类批准”。
 
-Codex 目前有宿主 hooks，但其信任、支持工具和失败行为有具体限制，不是完整执行边界；非托管 hook 的定义变更可能需重新信任。[官方 Hooks 说明](https://learn.chatgpt.com/docs/hooks)
+宿主 hooks 属于可选适配，不是通用 Skill 的前置依赖。例如 Codex 的 hooks 有具体信任、工具覆盖和失败行为限制；这些属于该宿主的机制，不能推广为其他 Agent 的统一规则。[Codex Hooks 示例](https://learn.chatgpt.com/docs/hooks)
 
-因此，v0.1 不安装全局 `PreToolUse`/`UserPromptSubmit` 拦截器。以后可做可选宿主适配器；接入前必须核对版本、事件覆盖、错误/超时行为及用户信任。普通 Skill 的最佳努力匹配和显式 `$forvynx` 已足以验证首版产品价值。
+因此，v0.1 不安装全局宿主拦截器。以后可做可选宿主适配器；接入前必须核对版本、事件覆盖、错误/超时行为及用户信任。首版使用通用 Skill 指令、按名称/路径显式加载及宿主可用的匹配机制；`$forvynx` 仅是部分宿主支持的调用语法。
 
 ## 10. 验收场景
 
@@ -328,7 +329,7 @@ v0.1 交付标准：M1–M4 的必需能力和适用验收通过；Skill 元数�
 
 ## 12. 评审时优先确认的三个决定
 
-1. **产品范围**：采用一个 bootstrap Skill 加确定性控制器；首版不做常驻代理和全局拦截。
+1. **产品范围**：采用一个通用 Agent Skill 加确定性控制器；Codex 是宿主示例，首版不做常驻代理和全局拦截。
 2. **工程范围**：Python 3.11+ 标准库，通用回退 + Python 适配器；Windows 优先、Linux CI。
 3. **接入范围**：工作区与仓库分离；先预览后确认安装/新仓接入；默认保留已有约定，Git hook 和 CI 均为可选具体动作。
 
@@ -338,8 +339,8 @@ v0.1 交付标准：M1–M4 的必需能力和适用验收通过；Skill 元数�
 
 宿主 Skill 格式、发现目录、自动匹配和 hooks 能力会变化，具体安装阶段重新核对当前宿主；本规格不把历史目录假定为通用事实。当前目录名 `forvynx.skill` 只是项目目录，不代表已经安装。
 
-官方文档支持以目录中的 `SKILL.md` 配合可选脚本和参考资源构成 Skill，并允许显式/隐式调用；本地发现位置与插件分发也有区别。[Build skills](https://learn.chatgpt.com/docs/build-skills)
+通用格式以目录中的 `SKILL.md` 配合可选脚本、参考和静态资源构成；具体 Agent 的发现、安装和调用机制各自实现。[Agent Skills 规范](https://agentskills.io/specification)
 
-复用分发和插件 hook 可在以后单独设计；安装插件本身不自动使其 hook 获得信任，执行环境还必须有对应脚本。[插件打包与 hook 说明](https://developers.openai.com/plugins/build/plugins)
+厂商插件打包或宿主 hook 可在以后单独适配；不作为 Forvynx 通用格式或运行依赖。例如 OpenAI 的插件分发还有独立的 hook 信任与脚本部署要求。[可选宿主分发示例](https://developers.openai.com/plugins/build/plugins)
 
-上文的流程、数据契约、Python 选型、文件命名和验收场景均是 Forvynx 的设计建议，不是 OpenAI 产品保证。
+上文的流程、数据契约、Python 选型、文件命名和验收场景均是 Forvynx 的设计，不代表任一 Agent 宿主承诺的产品能力。

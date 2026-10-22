@@ -2,6 +2,11 @@
 
 Use Python 3.11+ and Git. `python` below means the interpreter actually available
 in the host, including a bundled absolute path. No pip installation is required.
+The controller uses the same CLI in any agent or terminal with those capabilities;
+it does not call a vendor API. Install/discover the Skill using the target host's
+own conventions. `agents/openai.yaml` is optional presentation metadata, not a
+dependency of the portable Skill or controller. If the host does not auto-load
+`AGENTS.md`, explicitly load the relevant `.forvynx/workflow.md` through the Skill.
 Run from this Skill directory, or supply the absolute path to `scripts/forvynx.py`.
 Write JSON outputs only to explicitly selected scratch files; probe/plan themselves
 never write their workspace. In PowerShell, use UTF-8 when redirecting JSON.

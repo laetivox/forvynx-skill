@@ -503,6 +503,17 @@ class WorkspaceTest(unittest.TestCase):
 
 
 class PackageTest(unittest.TestCase):
+    def test_portable_skill_does_not_require_openai_metadata(self):
+        sys.path.insert(0, str(ROOT / "scripts"))
+        from validate_skill import validate
+        with tempfile.TemporaryDirectory(prefix="forvynx-neutral-") as folder:
+            target = Path(folder) / "forvynx"
+            shutil.copytree(ROOT / "skills/forvynx", target)
+            (target / "agents/openai.yaml").unlink()
+            report = validate(target)
+            self.assertEqual(report["status"], "passed")
+            self.assertFalse(report["optional_openai_metadata"])
+
     def test_metadata_references_and_syntax(self):
         sys.path.insert(0, str(ROOT / "scripts"))
         from validate_skill import validate
@@ -520,7 +531,7 @@ class PackageTest(unittest.TestCase):
                 self.assertIn("forvynx/SKILL.md", archive.namelist())
                 self.assertFalse(any("__pycache__" in p for p in archive.namelist()))
 
-    def test_extracted_package_runs_without_source_tree(self):
+    def test_extracted_package_runs_without_source_tree_or_host_metadata(self):
         sys.path.insert(0, str(ROOT / "scripts"))
         from build_package import build
         import zipfile
@@ -529,6 +540,7 @@ class PackageTest(unittest.TestCase):
             package = build(base / "skill.zip")
             with zipfile.ZipFile(package["path"]) as archive:
                 archive.extractall(base / "extracted")
+            (base / "extracted/forvynx/agents/openai.yaml").unlink()
             workspace = base / "workspace"
             repo = workspace / "app"
             repo.mkdir(parents=True)

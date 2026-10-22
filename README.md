@@ -2,7 +2,9 @@
 
 **先理解工程，再建立适合它的 AI 编码工作流。**
 
-Forvynx 是一个面向 Codex 的 bootstrap Skill：识别开发需求，检查工作区与 Git 边界，在用户确认后生成适量的协作规则，并用确定性脚本验证生成结果。
+Forvynx 是一个通用的 **Agent Skill**，用于建立 AI 编码工作流：识别开发需求，检查工作区与 Git 边界，在用户确认后生成适量的协作规则，并用确定性脚本验证生成结果。
+
+采用 [Agent Skills 的目录约定](https://agentskills.io/specification)，供支持该格式的 Agent 安装或加载。核心指令和脚本独立于具体模型、产品或厂商，Codex 是可用的宿主之一。
 
 当前版本：**v0.1.0 · 本地原型**。核心使用 Python 标准库和 Git，无需安装第三方 Python 运行依赖。
 
@@ -38,7 +40,7 @@ Forvynx 将语义判断留给 Skill，将可以确定检查的约束交给程序
 
 - Python **3.11 或以上**。
 - 可通过命令行调用的 Git。
-- 使用 Skill 时，需要支持本地 Skill 和文件/命令操作的 Codex 环境。
+- 使用 Skill 时，需要能加载 `SKILL.md`、读取工程文件并执行本地命令的 Agent 环境。
 
 以下命令均从本仓库根目录执行，`python` 指实际可用的解释器。Windows 未将 Python 加入 PATH 时，可换成 `py -3`，或使用解释器的绝对路径。
 
@@ -46,19 +48,30 @@ Forvynx 将语义判断留给 Skill，将可以确定检查的约束交给程序
 
 Skill 源目录是 [`skills/forvynx`](skills/forvynx)，入口为 [`SKILL.md`](skills/forvynx/SKILL.md)。
 
-可以在具备本地文件访问能力的 Codex 会话中直接提出：
+可以在具备本地文件访问能力的 Agent 会话中直接提出：
 
 > 使用当前仓库 skills/forvynx 下的 Forvynx Skill，检查我指定的工作区。先给出仓库边界、工作流建议和具体变更预览，确认接入后再应用。
 
-如需持久安装，可让 Codex 将**整个 `skills/forvynx` 目录**安装到当前宿主支持的 Skill 发现位置。安装前明确目的地及同名冲突处理；本项目不自动修改用户级配置，也不提供未经确认的覆盖安装。
+如需持久安装，将**整个 `skills/forvynx` 目录**交给目标 Agent 的 Skill 安装器，或放到该 Agent 支持的 Skill 发现位置。安装目录和调用方式遵循对应宿主约定；安装前明确目的地及同名冲突处理。
 
-安装并确认被宿主发现后，可显式调用：
+安装并确认被宿主发现后，可按名称提出请求：
 
 ```text
-$forvynx 为这个工作区建立适量的 AI 编码工作流，先展示方案和接入差异。
+使用 Forvynx 为这个工作区建立适量的 AI 编码工作流，先展示方案和接入差异。
 ```
 
-Skill 保持默认自动匹配能力，但能否自动触发由宿主判断，不保证拦截每一条对话。
+支持 `$skill-name` 语法的宿主也可以使用 `$forvynx`；这不是其他 Agent 必须采用的语法。自动发现、匹配和权限交互由对应宿主提供。
+
+### 通用核心与宿主配置
+
+| 部分 | 可移植性 |
+| --- | --- |
+| `SKILL.md`、`references/`、`scripts/`、`assets/` | 通用 Skill 内容；脚本依赖 Python 和 Git，不依赖厂商 API 或 SDK |
+| `agents/openai.yaml` | 可选的 OpenAI/Codex 展示元数据；其他 Agent 可忽略或省略 |
+| 安装目录、调用语法、自动匹配、工具权限 | 按目标 Agent 的约定使用，不绑定单一宿主 |
+| 生成的 `AGENTS.md` | 默认工程入口；宿主不自动读取它时，明确加载 `.forvynx/workflow.md` |
+
+当前验证覆盖通用控制器、独立分发包及省略 OpenAI 元数据的 Skill。各 Agent 的安装器和自动触发行为仍需在对应宿主中确认。
 
 ## 直接运行控制器
 
@@ -163,7 +176,7 @@ python -B scripts/build_package.py
 
 打包产物为 `dist/forvynx-0.1.0.zip`，采用可重现构建，包含独立的 `forvynx/` Skill 目录。`dist/` 不纳入源码提交；生成 ZIP 不代表已安装或发布。
 
-当前本地验证记录：49 项测试中 48 项通过，1 项因 Windows 文件符号链接权限跳过；junction 场景和独立解压运行已验证。仓库包含 Windows/Linux、Python 3.11/3.12 的 CI 配置，远端实际执行结果以 GitHub 为准。
+首版完整回归记录：49 项测试中 48 项通过，1 项因 Windows 文件符号链接权限跳过；junction 场景已验证。本轮通用化相关的 4 项打包检查均通过，包含移除 OpenAI 元数据后从独立目录运行完整流程。仓库包含 Windows/Linux、Python 3.11/3.12 的 CI 配置，远端实际执行结果以 GitHub 为准。
 
 `validate_skill.py` 检查本项目约定的受限元数据格式、引用和 Python 语法，不是通用 YAML 校验器。
 
@@ -177,4 +190,4 @@ docs/                设计、实现状态与交接说明
 .github/workflows/   本项目的 CI 配置
 ```
 
-进一步阅读：[设计规格](docs/forvynx-v0.1-design.md) · [实现与验证记录](docs/implementation-status.md) · [控制器命令参考](skills/forvynx/references/workflow.md)。
+进一步阅读：[设计规格](docs/forvynx-v0.1-design.md) · [实现与验证记录](docs/implementation-status.md) · [控制器命令参考](skills/forvynx/references/workflow.md) · [Agent 接续提示词](docs/agent-handoff.md)。
