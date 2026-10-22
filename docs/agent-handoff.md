@@ -25,6 +25,7 @@
 8. 固定模板也需要独立验证。分别报告结构、一致性、行为和工程检查，状态包含 passed/failed/not_run/unsupported；必需项没运行不能算通过。Plan 绑定精确写入载荷、前后状态及命令来源，执行使用 verify --plan <json> --execute <check-ids>；核对真实命令定义和授权，参数数组运行，避免拼 shell。产品 verifier 对照批准计划和产品模板清单；便携 checker 仅验证快照中的配置/引用/检查，不证明人类批准。本地 hook 用安装时绑定的 checker 检查暂存快照，CI 检查 checkout 快照。
 9. 普通 Skill 自动匹配不是全局拦截。本地 hook 可跳过；CI YAML 已生成不代表执行或远端必需检查已生效。v0.1 不做全局宿主拦截器，也不自动改远端保护。
 10. 安装目录、激活语法、自动匹配与工具权限由目标 Agent 决定，不能假定所有宿主使用 $forvynx 或自动读取 AGENTS.md。需要时通过 Skill 显式读取对应仓库的 .forvynx/workflow.md。
+11. 用户要求中英双语与精简 GitHub README：保留 README.md 英文版和 README.zh-CN.md 中文版并相互链接，详细流程放参考资料；Agent 回复跟随用户语言，命令、字段和固定模板不翻译。
 
 推荐首版技术取舍（仍以用户确认设计为准）：Python 3.11+ 标准库 + Git，Windows 优先并做 Linux CI；一个 Skill、probe/plan/apply/verify 控制器、通用回退和 Python 适配器。CI 中检查器随目标仓库版本化，不依赖用户本地 Skill 安装。
 

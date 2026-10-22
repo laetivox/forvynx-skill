@@ -14,6 +14,15 @@ reading this file. It needs repository file access, Python 3.11+, and Git for th
 controller workflow; no vendor API or SDK is required. `agents/openai.yaml` is
 optional host presentation metadata and may be ignored or omitted by other agents.
 
+## Language
+
+Reply in the user's requested language. Without an explicit preference, follow
+the language of their current request; Chinese and English are both supported.
+Use that language for explanations, proposals, confirmation requests, and result
+summaries. Preserve command syntax, paths, code, JSON keys, check IDs, and status
+values. Fixed controller templates remain in their shipped language; do not edit
+trusted template bytes merely to translate them.
+
 ## Route the request
 
 - Non-development tasks: complete the request directly, without discovery,

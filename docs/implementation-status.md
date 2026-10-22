@@ -11,6 +11,7 @@
 - 可选 GitHub Actions 模板、只读 hook 集成预览。checker 的暂存模式读取一份真实 Git index 快照，兼容活动的 `GIT_INDEX_FILE`，拒绝未解决冲突。
 - 标准库元数据/引用/语法检查、可重现 ZIP 打包、Windows/Linux CI 配置。
 - `agents/openai.yaml` 是可选展示元数据；省略该文件的 Skill 可以独立校验，控制器不依赖厂商 API。宿主不自动读取 AGENTS.md 时，由 Skill 显式加载工作流。
+- 提供精简的英文 `README.md` 与中文 `README.zh-CN.md`，相互链接。Skill 的解释、提议、确认请求和结果摘要跟随用户语言；命令、JSON 字段及固定控制器模板保持稳定。
 
 入口与完整用法见 [Skill](../skills/forvynx/SKILL.md) 和 [命令说明](../skills/forvynx/references/workflow.md)。
 
@@ -53,4 +54,4 @@
 
 这些命令从项目根目录运行。打包输出为 `dist/forvynx-0.1.0.zip`；ZIP 是可审阅的本地分发物，未自动发布，也不意味着已安装为插件。
 
-本次通用化后的分发包大小为 26,358 字节，SHA-256 为 `099b92954001c41bf892d8a69ea2b3001550e8f20bb4884cb102fcbbe16e7d21`。安装前仍需明确目的地和同名冲突处理；真实仓库接入前先生成其具体计划。
+本次增加中英回复约定后的分发包大小为 26,562 字节，SHA-256 为 `7b3c21d6365ec26fc76d956b3d1c1f7754dd754e4c1c86b8e8020fd11249ff04`。安装前仍需明确目的地和同名冲突处理；真实仓库接入前先生成其具体计划。
