@@ -1,43 +1,11 @@
-# Forvynx v0.1：Agent 接续提示词
+# Forvynx：新上下文入口
 
-当前状态：用户已允许按推荐默认值继续；v0.1 本地原型与测试已落盘，尚未安装到用户级目录或接入真实目标仓库。  
-配套设计：`docs/forvynx-v0.1-design.md`。如果换到不能访问原文件的新会话，请同时附上该设计文档；下文也保留了主要约束。
+最新需求、实现状态、验收缺口、授权范围和可粘贴提示词统一维护在 [需求清单与上下文交接](requirements-and-handoff.md)。请先读取该文档，使用其第 9 节提示词接续。
 
-以下提示词可以直接交给具备本地项目读写和命令执行能力的 Agent。继承已有设计授权；它不会把粘贴行为当成额外的安装或仓库接入批准。
+配套资料：
 
----
+- [详细设计](forvynx-v0.1-design.md)：技术背景与原设计验收 A01–A18。
+- [实现状态](implementation-status.md)：历史执行证据与限制。
+- [CLI 使用说明](../skills/forvynx/references/workflow.md)：实际命令和恢复流程。
 
-请继续 Forvynx 项目。先检查当前可用工作区、适用的 AGENTS.md 和已有改动；读取 docs/forvynx-v0.1-design.md 与 docs/implementation-status.md。用户已授权没有阻塞决策时按推荐方案推进，无须再次请求相同设计批准。不要假设能恢复“推荐AI项目”旧会话的完整助手正文。
-
-背景：Forvynx 是通用的 Agent Skill，按 Agent Skills 的目录约定分发，供支持该格式或能显式加载其指令的 Agent 使用。核心只依赖 Python/Git 和工程文件访问，不绑定 Codex 或厂商 API；agents/openai.yaml 是可选展示元数据。它识别开发意图，检查工作区/Git 边界，经明确确认接入仓库或安装，依据已有工程证据生成适量 AI 编码工作流，并验证生成组件。用户偏好先达成设计共识，再展开大规模代码。
-
-项目目录是 C:\Users\sskj-work\Documents\ChatGPT\forvynx.skill。本地分支为 main，origin 为 https://github.com/laetivox/forvynx-skill.git；用户已授权推送当前版本，后续操作先检查本地与远端实际状态。已有 README.md、README.zh-CN.md、skills/forvynx（Skill 与标准库控制器）、tests、校验脚本和可选 CI 配置。克隆或下载后直接安装 Skill 目录，无需自定义打包。没有授权安装到用户级目录、接入邻近真实项目、改全局配置或远端规则。
-
-核心约束：
-
-1. 工作区可不是 Git 仓库，下面可以有多个独立仓库。工作区、checkout、模块分开建模。worktree 的 .git 可以是文件；common Git 目录在外部不等于允许写入。嵌套仓库、子模块和新出现的仓库须独立确认接入。
-2. 翻译、写作等非开发小任务直接处理，不扫描 Git、不创建状态、不提安装。只读代码解释也不自动接入。已有仓库的日常小改动保持轻量；用户拒绝接入时，仍可按原任务授权与现有约定继续工作。
-3. 先只读发现，再生成具体计划和 diff。批准安装、新仓接入及范围扩大须有真实用户/宿主依据；已有明确授权持续有效，不反复询问。设计批准不等于全局安装或接管其他仓库。
-4. 模型判断意图、复杂度和工作流建议；脚本检查真实路径、checkout 身份、计划摘要、旧内容、覆盖冲突、实际结果。可编辑批准 JSON 只是审计记录，不能证明不可伪造的人类批准。
-5. 探测有深度与数量上限，不跟随 junction/符号链接，不扫描整个用户目录；证据文件读取同样不能越界。未知和访问错误不等于没有仓库。probe/plan/静态 verify 不执行工程脚本或装依赖，Git 查询禁用不必要的辅助程序及写入副作用。
-6. 原有 dirty 改动、AGENTS.md、hooks 和 CI 必须保留。只修改计划文件/托管块；幂等、漂移检查、每次写入重新核对边界与最近所属 Git checkout。共享工作区索引也须加锁；跨仓库失败如实报告部分完成，回滚保留用户后续编辑和可追踪的残留状态。
-7. 默认生成物仅为接入索引、仓库配置、简短 workflow、AGENTS 入口和固定模板的 checker。按需添加本地 Git hook 或 CI，不能生成一堆未使用的 Skill 或强加 DDD/TDD/多代理。
-8. 固定模板也需要独立验证。分别报告结构、一致性、行为和工程检查，状态包含 passed/failed/not_run/unsupported；必需项没运行不能算通过。Plan 绑定精确写入载荷、前后状态及命令来源，执行使用 verify --plan <json> --execute <check-ids>；核对真实命令定义和授权，参数数组运行，避免拼 shell。产品 verifier 对照批准计划和产品模板清单；便携 checker 仅验证快照中的配置/引用/检查，不证明人类批准。本地 hook 用安装时绑定的 checker 检查暂存快照，CI 检查 checkout 快照。
-9. 普通 Skill 自动匹配不是全局拦截。本地 hook 可跳过；CI YAML 已生成不代表执行或远端必需检查已生效。v0.1 不做全局宿主拦截器，也不自动改远端保护。
-10. 安装目录、激活语法、自动匹配与工具权限由目标 Agent 决定，不能假定所有宿主使用 $forvynx 或自动读取 AGENTS.md。需要时通过 Skill 显式读取对应仓库的 .forvynx/workflow.md。
-11. 用户要求中英双语与精简 GitHub README：保留 README.md 英文版和 README.zh-CN.md 中文版并相互链接，详细流程放参考资料；Agent 回复跟随用户语言，命令、字段和固定模板不翻译。
-
-推荐首版技术取舍（仍以用户确认设计为准）：Python 3.11+ 标准库 + Git，Windows 优先并做 Linux CI；一个 Skill、probe/plan/apply/verify 控制器、通用回退和 Python 适配器。CI 中检查器随目标仓库版本化，不依赖用户本地 Skill 安装。
-
-请以实现状态为准继续修复或试用，不重做已通过的工作，也不重复设计许可。已有实现按以下阶段组织：
-
-- M1：Skill 入口与只读 probe，验证非开发绕过、空目录、多仓、worktree、嵌套边界和扫描限制。
-- M2：计划、受限应用、批准审计、托管块、幂等、漂移和条件恢复；临时工作区演练越界、无批准拒写及部分失败。
-- M3：Python 证据适配、最小生成物、固定 checker 与独立验证，缺环境或失败如实报告。
-- M4：可选 Git hook 与 GitHub Actions 接入方案，分开展示生成、安装、执行、远端保护状态。
-
-测试在隔离的临时样例目录执行，不接管真实邻近仓库；临时目录不等于安全沙箱，不执行任意生成代码。已有同名文件先读取再修改。安装或接入真实仓库时，先完成具体预览，使确认成为最后一步。
-
-应用日志/备份在 OS 临时目录的 forvynx-state/<workspace-hash>，锁在 forvynx-locks；不放入目标仓库。hook-preview 仅返回集成内容，不自动安装。随附 quick_validate.py 在当前环境缺少 PyYAML；可运行 python -B scripts/validate_skill.py 完成本项目受限元数据格式、引用和语法检查，无需安装依赖。不要把该检查称为通用 YAML 校验。
-
-若无法访问本地项目，直接交付自包含设计与下一步操作说明，明确文件没有写入；不要声称操作了用户本地环境。
+后续需求变化更新统一清单并保留条目 ID，不在本文件另存一份状态，避免两个交接入口互相矛盾。
