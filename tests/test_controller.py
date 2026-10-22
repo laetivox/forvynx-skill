@@ -502,7 +502,7 @@ class WorkspaceTest(unittest.TestCase):
             apply_plan(value, value["digest"])
 
 
-class PackageTest(unittest.TestCase):
+class SkillPortabilityTest(unittest.TestCase):
     def test_portable_skill_does_not_require_openai_metadata(self):
         sys.path.insert(0, str(ROOT / "scripts"))
         from validate_skill import validate
@@ -519,33 +519,17 @@ class PackageTest(unittest.TestCase):
         from validate_skill import validate
         self.assertEqual(validate()["status"], "passed")
 
-    def test_package_is_reproducible(self):
-        sys.path.insert(0, str(ROOT / "scripts"))
-        from build_package import build
-        import zipfile
-        with tempfile.TemporaryDirectory(prefix="forvynx-package-") as folder:
-            first = build(Path(folder) / "first.zip")
-            second = build(Path(folder) / "second.zip")
-            self.assertEqual(first["sha256"], second["sha256"])
-            with zipfile.ZipFile(first["path"]) as archive:
-                self.assertIn("forvynx/SKILL.md", archive.namelist())
-                self.assertFalse(any("__pycache__" in p for p in archive.namelist()))
-
-    def test_extracted_package_runs_without_source_tree_or_host_metadata(self):
-        sys.path.insert(0, str(ROOT / "scripts"))
-        from build_package import build
-        import zipfile
+    def test_copied_skill_runs_without_source_tree_or_host_metadata(self):
         with tempfile.TemporaryDirectory(prefix="forvynx-standalone-") as folder:
             base = Path(folder).resolve()
-            package = build(base / "skill.zip")
-            with zipfile.ZipFile(package["path"]) as archive:
-                archive.extractall(base / "extracted")
-            (base / "extracted/forvynx/agents/openai.yaml").unlink()
+            target = base / "copied/forvynx"
+            shutil.copytree(ROOT / "skills/forvynx", target)
+            (target / "agents/openai.yaml").unlink()
             workspace = base / "workspace"
             repo = workspace / "app"
             repo.mkdir(parents=True)
             subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            entry = base / "extracted/forvynx/scripts/forvynx.py"
+            entry = target / "scripts/forvynx.py"
             def run(*args):
                 proc = subprocess.run([sys.executable, "-B", str(entry), *args], cwd=base,
                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE)

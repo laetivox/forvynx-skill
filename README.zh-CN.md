@@ -17,7 +17,7 @@
 
 需要 **Python 3.11+**、**Git** 和支持 [Agent Skills](https://agentskills.io/specification) 的 Agent。
 
-通过 Agent 的 Skill 安装器安装 [`skills/forvynx`](skills/forvynx)，或将整个目录复制到其 Skill 目录。
+克隆或下载本仓库后，通过 Agent 的 Skill 安装器安装 [`skills/forvynx`](skills/forvynx)，或将整个目录复制到其 Skill 目录。
 
 ## 使用
 
@@ -27,19 +27,5 @@
 使用 Forvynx 检查这个项目，搭建开发工作流。
 先给出方案和文件差异，确认后再应用。
 ```
-
-支持中文和英文，默认跟随你的提问语言。
-
-## 开发
-
-从仓库根目录运行：
-
-```sh
-python -B -m unittest discover -s tests -v
-python -B scripts/validate_skill.py
-python -B scripts/build_package.py
-```
-
-打包产物：`dist/forvynx-0.1.0.zip`。
 
 [详细用法](skills/forvynx/references/workflow.md)

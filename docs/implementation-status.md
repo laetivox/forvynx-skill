@@ -9,7 +9,7 @@
 - 计划内完整字节载荷、内容摘要与差异；范围和最近所属仓库核对；相关证据漂移拒绝；共享资源锁、幂等应用、日志与条件补偿。无确认时不创建目标配置或状态。
 - 通用回退与 Python 清单适配；保留用户 AGENTS 原文，生成最小工作流与固定便携 checker。候选测试命令不会在发现时执行，也不会自动安装工具。
 - 可选 GitHub Actions 模板、只读 hook 集成预览。checker 的暂存模式读取一份真实 Git index 快照，兼容活动的 `GIT_INDEX_FILE`，拒绝未解决冲突。
-- 标准库元数据/引用/语法检查、可重现 ZIP 打包、Windows/Linux CI 配置。
+- 标准库元数据/引用/语法检查、Windows/Linux CI 配置。Skill 目录可直接安装，无需构建或打包。
 - `agents/openai.yaml` 是可选展示元数据；省略该文件的 Skill 可以独立校验，控制器不依赖厂商 API。宿主不自动读取 AGENTS.md 时，由 Skill 显式加载工作流。
 - 提供精简的英文 `README.md` 与中文 `README.zh-CN.md`，相互链接。Skill 的解释、提议、确认请求和结果摘要跟随用户语言；命令、JSON 字段及固定控制器模板保持稳定。
 
@@ -20,9 +20,8 @@
 本地环境：Windows，Python 3.12.14，Git 2.47.0.windows.2。
 
 - 首版控制器的完整回归：49 项，48 项通过，1 项因系统不允许创建文件符号链接而跳过，耗时 135.485 秒。
-- 本轮通用化对校验器的改动执行了 4 项打包/元数据定向回归，全部通过：可选 OpenAI 元数据校验、标准元数据与引用、可重现构建、移除宿主元数据后从独立目录完成完整控制器流程。控制器业务逻辑未改，不将本轮定向检查说成重跑了全量套件。
+- 目录分发的 3 项定向回归全部通过：可选 OpenAI 元数据校验、标准元数据与引用，以及移除宿主元数据后从独立复制目录完成完整控制器流程。控制器业务逻辑未改；定向检查不等于重跑全量套件。
 - 已覆盖真实临时仓库 hook 拦截错误暂存配置、静态验证不执行目标 checker、未合并 index 拒绝、Python 候选命令使用当前解释器、不完整生成物拒写、审阅 diff 与实际载荷不一致拒写等场景。
-- 分发 ZIP 的可重现构建通过；解压至独立临时目录后，完整执行探测、计划、应用、验证，无需原源码目录。
 - Windows junction 场景已经实际通过；文件符号链接跳过不等价于该项通过。
 - `scripts/validate_skill.py` 通过：仅验证本项目约定的受限 YAML 元数据、Markdown 引用和 Python 语法，不是通用 YAML 解析器。
 - skill-creator 随附 `quick_validate.py` 已尝试，但当前运行时缺少 PyYAML，未宣称通过，也未安装该依赖。
@@ -33,7 +32,7 @@
 
 ## 当前限制与未执行项
 
-- 按用户后续要求，本地 Git 仓库已初始化为 `main`；远程地址待用户提供，尚未推送或发布。没有用户级 Skill 安装、真实仓库接入、真实 hooks 启用或远端保护变更。
+- 本地分支为 `main`，已关联远端 [laetivox/forvynx-skill](https://github.com/laetivox/forvynx-skill)。代码与 CI 的远端状态以 GitHub 为准。没有用户级 Skill 安装、真实仓库接入、真实 hooks 启用或远端保护变更。
 - Linux/Python 3.11 只有 CI 配置，当前会话没有该环境执行证据；远端 CI 尚未运行。
 - 跨宿主复用基于通用格式和独立控制器；没有宣称已在每个 Agent 产品中实测其安装器、自动发现或权限交互。
 - 自动 Skill 匹配是宿主的最佳努力行为；当前原型未安装，不能声称已经在所有任务中自动触发。
@@ -42,16 +41,13 @@
 - 进程超时终止直接子进程；不提供任意仓库代码的进程树沙箱。命令输出默认丢弃，失败时可按现有授权在宿主终端重新诊断。
 - 状态与备份位于 OS 临时目录，可能被清理；空目录可能在回滚后保留。部分恢复冲突会留下可追踪日志，不自动覆盖后续用户编辑。
 
-## 在当前机器运行
+## 开发检查
 
-本机 Python 未加入 PATH，可使用应用随附的绝对路径：
+从项目根目录运行：
 
-```powershell
-& 'C:\Users\sskj-work\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -B -m unittest discover -s tests -v
-& 'C:\Users\sskj-work\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -B scripts\validate_skill.py
-& 'C:\Users\sskj-work\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -B scripts\build_package.py
+```sh
+python -B -m unittest discover -s tests -v
+python -B scripts/validate_skill.py
 ```
 
-这些命令从项目根目录运行。打包输出为 `dist/forvynx-0.1.0.zip`；ZIP 是可审阅的本地分发物，未自动发布，也不意味着已安装为插件。
-
-本次增加中英回复约定后的分发包大小为 26,562 字节，SHA-256 为 `7b3c21d6365ec26fc76d956b3d1c1f7754dd754e4c1c86b8e8020fd11249ff04`。安装前仍需明确目的地和同名冲突处理；真实仓库接入前先生成其具体计划。
+克隆或下载仓库后直接安装 `skills/forvynx` 目录，不需要自定义打包。安装前明确目的地和同名冲突处理；真实仓库接入前先生成其具体计划。

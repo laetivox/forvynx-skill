@@ -119,5 +119,5 @@ their own reviewed environment setup.
 
 Local development files are not an installed user-level Skill. Installation needs
 an explicit destination and conflict preview; this controller does not auto-install
-itself or write host settings. `scripts/build_package.py` in the source project
-produces a deterministic ZIP for manual review/distribution, not a published plugin.
+itself or write host settings. Clone or download the source repository and install
+the entire `skills/forvynx` directory; no build step is required.

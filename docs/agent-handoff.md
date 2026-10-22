@@ -11,7 +11,7 @@
 
 背景：Forvynx 是通用的 Agent Skill，按 Agent Skills 的目录约定分发，供支持该格式或能显式加载其指令的 Agent 使用。核心只依赖 Python/Git 和工程文件访问，不绑定 Codex 或厂商 API；agents/openai.yaml 是可选展示元数据。它识别开发意图，检查工作区/Git 边界，经明确确认接入仓库或安装，依据已有工程证据生成适量 AI 编码工作流，并验证生成组件。用户偏好先达成设计共识，再展开大规模代码。
 
-项目目录是 C:\Users\sskj-work\Documents\ChatGPT\forvynx.skill。用户已明确要求创建仓库，现已初始化本地 Git（main），远程地址待用户提供，尚未推送。已有 README.md、skills/forvynx（Skill 与标准库控制器）、tests、开发脚本、可选 CI 配置与 dist 分发包。当前具体内容请重新检查。没有授权安装到用户级目录、接入邻近真实项目、改全局配置或远端规则。
+项目目录是 C:\Users\sskj-work\Documents\ChatGPT\forvynx.skill。本地分支为 main，origin 为 https://github.com/laetivox/forvynx-skill.git；用户已授权推送当前版本，后续操作先检查本地与远端实际状态。已有 README.md、README.zh-CN.md、skills/forvynx（Skill 与标准库控制器）、tests、校验脚本和可选 CI 配置。克隆或下载后直接安装 Skill 目录，无需自定义打包。没有授权安装到用户级目录、接入邻近真实项目、改全局配置或远端规则。
 
 核心约束：
 
