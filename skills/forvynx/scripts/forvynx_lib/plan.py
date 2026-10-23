@@ -8,7 +8,7 @@ from . import VERSION
 from .adapters import inspect_repo, workflow
 from .boundary import absolute, assert_owner, guarded, identity, read_bytes, relative_path, state_directory, within
 from .domain import ForvynxError, Plan, canonical, content_state, decode, encode, json_bytes, sha
-from .portable import BEGIN, END, validate_config
+from .portable import BEGIN, END, check_review, validate_config, validate_workflow
 
 PACKAGE = Path(__file__).resolve().parents[2]
 CHECKER = Path(__file__).with_name("portable.py")
@@ -98,10 +98,24 @@ def build_plan(inventory, selection):
                 if content_state(read_bytes(root, name)) != {"kind": "file", "sha256": expected}:
                     raise ForvynxError(f"Existing component drift: {name}")
         definitions = item.get("checks", old["checks"] if old else [])
-        definitions = [{"id": c["id"], "argv": c["argv"], "cwd": c.get("cwd", "."),
-                        "timeout": c.get("timeout", 60), "env": c.get("env", {}),
-                        "required": c.get("required", True), "sources": c.get("sources", [])} for c in definitions]
-        components = {".forvynx/check.py": CHECKER.read_bytes(), ".forvynx/workflow.md": workflow(details["profile"])}
+        try:
+            definitions = [{"id": c["id"], "argv": c["argv"], "cwd": c.get("cwd", "."),
+                            "timeout": c.get("timeout", 60), "env": c.get("env", {}),
+                            "required": c.get("required", True), "sources": c.get("sources", []),
+                            "review": check_review(c)} for c in definitions]
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ForvynxError("Invalid check definition: " + str(exc), 2) from exc
+        proposal = item.get("workflow", old.get("workflow") if old else None)
+        if "workflow" in item or proposal is not None:
+            try:
+                validate_workflow(proposal, {c["id"] for c in definitions}, {e["path"] for e in details["evidence"]})
+                for decision in proposal["decisions"]:
+                    for source in decision["sources"]:
+                        assert_owner(root, source, repo)
+            except (ValueError, TypeError, KeyError) as exc:
+                raise ForvynxError(str(exc), 2) from exc
+        components = {".forvynx/check.py": CHECKER.read_bytes(),
+                      ".forvynx/workflow.md": workflow(details["profile"], proposal, {c["id"] for c in definitions})}
         use_ci = item.get("ci", old.get("ci", False) if old else False)
         if not isinstance(use_ci, bool):
             raise ForvynxError("ci must be a boolean", 2)
@@ -111,6 +125,8 @@ def build_plan(inventory, selection):
             components[".github/workflows/forvynx.yml"] = (PACKAGE / "assets/github-ci.yml").read_bytes()
         config = {"schema_version": 1, "generator": "forvynx", "version": VERSION, "repo_id": repo_id,
                   "profile": details["profile"], "components": {k: sha(v) for k, v in components.items()}, "checks": definitions, "ci": use_ci}
+        if proposal is not None:
+            config["workflow"] = proposal
         try:
             validate_config(config)
         except (ValueError, TypeError, KeyError) as exc:
@@ -183,7 +199,12 @@ def validate_boundaries(value, check_evidence=True):
         repo_action = next(a for a in value["actions"] if a["root"] == check["root"] and a["path"] == ".forvynx/repo.json")
         config = validate_config(json.loads(decode(repo_action["content_b64"])))
         expected = next((c for c in config["checks"] if c["id"] == check["id"]), None)
-        if expected is None or any(check.get(k) != v for k, v in expected.items()):
+        try:
+            matches = (expected is not None and all(check.get(k) == v for k, v in expected.items())
+                       and check_review(check) == check_review(expected))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ForvynxError("Invalid planned check review: " + str(exc)) from exc
+        if not matches:
             raise ForvynxError("Plan checks do not match proposed repository configuration")
     if not check_evidence:
         return workspace
@@ -225,10 +246,28 @@ def validate_rendered(value):
         required = {"AGENTS.md", ".forvynx/repo.json", ".forvynx/check.py", ".forvynx/workflow.md"}
         if not required <= set(actions):
             raise ForvynxError("Incomplete proposed repository bundle")
-        config = validate_config(json.loads(decode(actions[".forvynx/repo.json"]["content_b64"])))
+        try:
+            config = validate_config(json.loads(decode(actions[".forvynx/repo.json"]["content_b64"])))
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ForvynxError("Invalid proposed repository configuration: " + str(exc)) from exc
         if config["repo_id"] != repo["repo_id"] or config["profile"] != repo["profile"]:
             raise ForvynxError("Repository bundle identity/profile mismatch")
-        expected_components = {".forvynx/check.py": CHECKER.read_bytes(), ".forvynx/workflow.md": workflow(repo["profile"])}
+        for evidence in repo["evidence"]:
+            action = actions.get(evidence["path"])
+            if action is not None and evidence["state"] != action["before"]:
+                raise ForvynxError("Planned evidence does not match the reviewed before state")
+        try:
+            proposal = config.get("workflow")
+            if proposal is not None:
+                validate_workflow(proposal, {c["id"] for c in config["checks"]},
+                                  {e["path"] for e in repo["evidence"] if e["state"]["kind"] == "file"})
+                for decision in proposal["decisions"]:
+                    for source in decision["sources"]:
+                        assert_owner(root, source, repo["identity"])
+            rendered_workflow = workflow(repo["profile"], proposal, {c["id"] for c in config["checks"]})
+        except (ValueError, TypeError, KeyError) as exc:
+            raise ForvynxError("Invalid proposed workflow: " + str(exc)) from exc
+        expected_components = {".forvynx/check.py": CHECKER.read_bytes(), ".forvynx/workflow.md": rendered_workflow}
         if config.get("ci"):
             expected_components[".github/workflows/forvynx.yml"] = (PACKAGE / "assets/github-ci.yml").read_bytes()
         expected_paths = required | ({".github/workflows/forvynx.yml"} if config.get("ci") else set())

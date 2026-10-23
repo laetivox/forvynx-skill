@@ -12,15 +12,16 @@ from .domain import ForvynxError
 EXCLUDED = {".git", ".forvynx", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "vendor", ".cache", ".tox"}
 
 
-def probe(workspace, max_depth=3, max_dirs=5000):
-    if max_depth < 0 or max_dirs < 1:
+def probe(workspace, max_depth=3, max_dirs=5000, max_entries=5000):
+    if max_depth < 0 or max_dirs < 1 or max_entries < 1:
         raise ForvynxError("Invalid scan limits", 2)
     root = absolute(workspace)
     if not root.is_dir():
         raise ForvynxError("Workspace must be an accessible directory", 5)
     result = {"schema_version": 1, "version": VERSION, "workspace": str(root),
-              "limits": {"max_depth": max_depth, "max_dirs": max_dirs}, "complete": True,
+              "limits": {"max_depth": max_depth, "max_dirs": max_dirs, "max_entries": max_entries}, "complete": True,
               "repositories": [], "external_repository": None, "errors": [], "skipped_links": [],
+              "enumerated_entries": 0, "peak_pending_directories": 0,
               "capabilities": {"git": bool(GIT)}}
     result["recovery"] = []
     state_root = state_directory(root)
@@ -38,6 +39,7 @@ def probe(workspace, max_depth=3, max_dirs=5000):
         result["errors"].append({"path": str(root), "reason": "Git unavailable"})
         return result
     found, queue, visited = set(), deque([(root, 0)]), 0
+    result["peak_pending_directories"] = 1
     while queue:
         if visited >= max_dirs:
             result["complete"] = False
@@ -55,13 +57,18 @@ def probe(workspace, max_depth=3, max_dirs=5000):
                     dirty = git(repo["root"], "status", "--porcelain=v1", "--untracked-files=normal").stdout
                     result["repositories"].append({"identity": repo, "relative_path": absolute(repo["root"]).relative_to(root).as_posix(),
                                                    "dirty": bool(dirty), **details})
+            if result["enumerated_entries"] >= max_entries:
+                result["complete"] = False
+                continue
             with os.scandir(folder) as entries:
                 children = []
                 for entry in entries:
-                    if len(children) == max_dirs:
+                    children.append(entry)
+                    result["enumerated_entries"] += 1
+                    if result["enumerated_entries"] >= max_entries:
+                        # Do not fetch an extra entry just to prove truncation.
                         result["complete"] = False
                         break
-                    children.append(entry)
                 children.sort(key=lambda p: p.name)
             for child in children:
                 if child.name in EXCLUDED:
@@ -73,8 +80,11 @@ def probe(workspace, max_depth=3, max_dirs=5000):
                     continue
                 if depth == max_depth:
                     result["complete"] = False
-                else:
+                elif visited + len(queue) < max_dirs:
                     queue.append((folder / child.name, depth + 1))
+                    result["peak_pending_directories"] = max(result["peak_pending_directories"], len(queue))
+                else:
+                    result["complete"] = False
         except (OSError, ForvynxError) as exc:
             result["complete"] = False
             result["errors"].append({"path": str(folder), "reason": str(exc)})

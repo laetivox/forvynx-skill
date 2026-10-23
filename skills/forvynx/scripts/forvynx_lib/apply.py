@@ -4,6 +4,8 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
+from copy import deepcopy
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .boundary import absolute, assert_owner, atomic_write, guarded, private_directory, read_bytes, state, state_directory
@@ -97,6 +99,10 @@ def apply_plan(value, confirmation, approval_source="manual_digest_confirmation"
             return {"status": "no_change", "digest": value["digest"]}
         report = {"schema_version": 1, "status": "applying", "plan": value, "completed": [],
                   "approval": {"digest": confirmation, "source": approval_source,
+                               "recorded_at": datetime.now(timezone.utc).isoformat(),
+                               "recorded_at_notice": "Controller journal recording time, not the time of human approval.",
+                               "scope": deepcopy(value["scope"]),
+                               "repository_ids": sorted(r["repo_id"] for r in value["repositories"]),
                                "security_notice": "Audit convention; not independently authenticated human approval."}}
         write_journal(value, report)
         writer = writer or atomic_write

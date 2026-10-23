@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -83,6 +84,74 @@ class Snapshot:
         return data
 
 
+def validate_workflow(value, check_ids, evidence_paths=None):
+    """Validate declarative suggestions, not their truth or authorization."""
+    if not isinstance(value, dict) or set(value) != {"schema_version", "decisions", "unknowns"}:
+        raise ValueError("Workflow must contain schema_version, decisions and unknowns")
+    if type(value["schema_version"]) is not int or value["schema_version"] != 1:
+        raise ValueError("Unsupported workflow format")
+
+    def text(item):
+        return isinstance(item, str) and bool(item.strip()) and len(item) <= 800 and item.isprintable()
+
+    def items(sequence):
+        return isinstance(sequence, list) and len(sequence) <= 16
+
+    if not items(value["decisions"]) or not items(value["unknowns"]) or any(not text(u) for u in value["unknowns"]):
+        raise ValueError("Workflow needs bounded decisions and single-line unknowns")
+    seen = set()
+    fields = {"id", "applies_to", "guidance", "reason", "confidence", "sources", "check_ids"}
+    for decision in value["decisions"]:
+        if not isinstance(decision, dict) or set(decision) != fields:
+            raise ValueError("Invalid workflow decision fields")
+        name = decision["id"]
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name) or name in seen:
+            raise ValueError("Invalid/duplicate workflow decision ID")
+        seen.add(name)
+        if decision["applies_to"] not in ("all", "small_change", "substantial_change", "cross_repository"):
+            raise ValueError("Unsupported workflow task scope")
+        if not text(decision["guidance"]) or not text(decision["reason"]):
+            raise ValueError("Workflow guidance/reason must be bounded single-line text")
+        if decision["confidence"] not in ("high", "medium", "low"):
+            raise ValueError("Unsupported declared workflow confidence")
+        for field in ("sources", "check_ids"):
+            sequence = decision[field]
+            if not items(sequence) or any(not text(s) for s in sequence) or len(set(sequence)) != len(sequence):
+                raise ValueError("Invalid/duplicate workflow references")
+        if decision["confidence"] != "low" and not decision["sources"]:
+            raise ValueError("Workflow confidence requires a source; unsupported proposals must be low")
+        for source in decision["sources"]:
+            safe_relative(source)
+            if source.startswith(".forvynx/") or source == ".github/workflows/forvynx.yml":
+                raise ValueError("Generated components are not workflow evidence")
+            if evidence_paths is not None and source not in evidence_paths:
+                raise ValueError("Workflow source was not discovered as repository evidence")
+        if any(check_id not in check_ids for check_id in decision["check_ids"]):
+            raise ValueError("Unknown workflow check reference")
+    return value
+
+
+def check_review(check):
+    """Legacy absence means unknown; explicit declarations are not permissions."""
+    if "review" not in check:
+        return {"dependencies": None, "network": "unknown", "writes": "unknown", "notes": []}
+    value = check["review"]
+    if not isinstance(value, dict) or set(value) != {"dependencies", "network", "writes", "notes"}:
+        raise ValueError("Check review must declare dependencies, network, writes and notes")
+    for field in ("network", "writes"):
+        if value[field] not in ("none", "possible", "unknown"):
+            raise ValueError("Unsupported check review declaration")
+    for field in ("dependencies", "notes"):
+        sequence = value[field]
+        if field == "dependencies" and sequence is None:
+            continue
+        if (not isinstance(sequence, list) or len(sequence) > 16
+                or any(not isinstance(s, str) or not s.strip() or len(s) > 800 or not s.isprintable() for s in sequence)
+                or len(set(sequence)) != len(sequence)):
+            raise ValueError("Check review lists must contain unique bounded single-line text")
+    return value
+
+
 def validate_config(config):
     if config.get("schema_version") != 1 or config.get("generator") != "forvynx":
         raise ValueError("Unsupported repository config")
@@ -111,12 +180,15 @@ def validate_config(config):
             safe_relative(cwd)
         if not isinstance(check.get("timeout"), (int, float)) or not 0 < check["timeout"] <= 600:
             raise ValueError("Check timeout must be in (0, 600]")
-        if not isinstance(check.get("env"), dict) or any(not isinstance(k, str) or not isinstance(v, str) or "=" in k or "\x00" in k + v for k, v in check["env"].items()):
+        if not isinstance(check.get("env"), dict) or any(not isinstance(k, str) or not k or not isinstance(v, str) or "=" in k or "\x00" in k + v for k, v in check["env"].items()):
             raise ValueError("Invalid check environment")
         if not isinstance(check.get("sources", []), list):
             raise ValueError("Check sources must be a list")
         for source in check.get("sources", []):
             safe_relative(source)
+        check_review(check)
+    if "workflow" in config:
+        validate_workflow(config["workflow"], seen)
     return config
 
 
@@ -133,40 +205,83 @@ def inspect_snapshot(snapshot):
     for check in config["checks"]:
         for source in check.get("sources", []):
             snapshot.read(source)
+    for decision in config.get("workflow", {}).get("decisions", []):
+        for source in decision["sources"]:
+            snapshot.read(source)
     return config
 
 
-def run_check(root, check):
+def check_result(root, check, status="not_run", reason="not selected for execution"):
+    """A complete report, including checks that never started a process."""
     root = Path(root).resolve()
-    cwd = root if check["cwd"] == "." else root.joinpath(*safe_relative(check["cwd"]).split("/"))
-    if not cwd.is_dir():
-        return {"id": check["id"], "required": check["required"], "status": "unsupported", "exit_code": None, "reason": "cwd unavailable"}
-    for part in (cwd, *cwd.parents):
-        if part == root:
-            break
-        info = part.lstat()
-        if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-            raise ValueError("Linked check working directory")
-    cwd.resolve().relative_to(root)
+    relative = check.get("cwd", ".")
+    cwd = root if relative == "." else root.joinpath(*safe_relative(relative).split("/"))
     argv = [sys.executable if arg == "$PYTHON" else arg for arg in check["argv"]]
-    env = os.environ.copy()
-    env.update(check["env"])
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    started = time.monotonic()
-    result = {"id": check["id"], "required": check["required"], "argv": argv, "cwd": str(cwd), "output": "not_recorded"}
+    definition = {"id": check["id"], "argv": check["argv"], "cwd": relative,
+                  "timeout": check.get("timeout", 60), "env": check.get("env", {}),
+                  "required": check["required"], "sources": check.get("sources", []), "review": check_review(check)}
+    digest = hashlib.sha256(json.dumps(definition, ensure_ascii=False, sort_keys=True,
+                                      separators=(",", ":")).encode("utf-8")).hexdigest()
+    return {"id": check["id"], "key": check.get("key"), "root": str(root), "required": check["required"],
+            "argv": argv, "cwd": str(cwd), "status": status, "exit_code": None, "duration_ms": 0,
+            "reason": reason, "output": "not_recorded", "log_ref": None,
+            "review": definition["review"], "definition_sha256": digest}
+
+
+def run_check(root, check):
+    result = check_result(root, check, "unsupported", "check did not start")
+    root, cwd = Path(result["root"]), Path(result["cwd"])
     try:
-        # Discard output instead of retaining secrets or an unbounded output file.
-        with open(os.devnull, "wb") as output:
-            proc = subprocess.Popen(argv, cwd=cwd, env=env, stdout=output, stderr=output, shell=False)
+        for part in (cwd, *cwd.parents):
+            if part == root:
+                break
+            info = part.lstat()
+            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                result["reason"] = "linked check working directory"
+                return result
+        if not cwd.is_dir():
+            result["reason"] = "cwd unavailable"
+            return result
+        cwd.resolve().relative_to(root)
+    except (ValueError, OSError) as exc:
+        result["reason"] = "cwd unavailable: " + str(exc)
+        return result
+    env = os.environ.copy()
+    env.update(check.get("env", {}))
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    try:
+        output = open(os.devnull, "wb")
+    except OSError as exc:
+        result["reason"] = "output sink unavailable: " + str(exc)
+        return result
+    # Discard output instead of retaining secrets or an unbounded output file.
+    with output:
+        started = time.monotonic()
+        try:
+            proc = subprocess.Popen(result["argv"], cwd=cwd, env=env, stdout=output, stderr=output, shell=False)
+        except OSError as exc:
+            result["reason"] = "check could not start: " + str(exc)
+            return result
+        try:
+            result["exit_code"] = proc.wait(timeout=check.get("timeout", 60))
+            result["status"] = "passed" if result["exit_code"] == 0 else "failed"
+            result["reason"] = "completed" if result["exit_code"] == 0 else "nonzero exit status"
+        except subprocess.TimeoutExpired:
+            result.update(status="failed", exit_code=None,
+                          reason="timeout; spawned child processes may require host cleanup")
             try:
-                result["exit_code"] = proc.wait(timeout=check["timeout"])
-                result["status"] = "passed" if result["exit_code"] == 0 else "failed"
-            except subprocess.TimeoutExpired:
                 proc.kill()
-                proc.wait()
-                result.update(status="failed", exit_code=None, reason="timeout; spawned child processes may require host cleanup")
-    except FileNotFoundError:
-        result.update(status="unsupported", exit_code=None, reason="executable or cwd unavailable")
+                proc.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                result["reason"] = "timeout; direct process cleanup failed; host cleanup required: " + str(exc)
+        except OSError as exc:
+            result.update(status="failed", exit_code=None,
+                          reason="started process wait failed; host cleanup may be required: " + str(exc))
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except (OSError, subprocess.TimeoutExpired) as cleanup:
+                result["reason"] += "; direct process cleanup failed: " + str(cleanup)
     result["duration_ms"] = round((time.monotonic() - started) * 1000)
     return result
 
@@ -181,7 +296,11 @@ def main():
         if args.source == "index" and args.execute:
             raise ValueError("Index mode only permits structural checks")
         config = inspect_snapshot(Snapshot(args.root, args.source))
-        checks = [run_check(args.root, c) if args.execute else {"id": c["id"], "required": c["required"], "status": "not_run"} for c in config["checks"]]
+        checks = []
+        for definition in config["checks"]:
+            check = {**definition, "key": config["repo_id"] + ":" + definition["id"]}
+            checks.append(run_check(args.root, check) if args.execute else
+                          check_result(args.root, check, reason="structural check only; execution not requested"))
         ready = all(not c["required"] or c["status"] == "passed" for c in checks)
         # Structural hook intentionally does not claim engineering checks passed.
         structural = args.source == "index"
@@ -189,7 +308,9 @@ def main():
                           "engineering_verification": "configured" if checks else "not_configured"}))
         if structural or ready:
             return 0
-        return 4 if any(c["status"] == "failed" and c["required"] for c in checks) else 2
+        if any(c["status"] == "failed" and c["required"] for c in checks):
+            return 4
+        return 5 if any(c["status"] == "unsupported" and c["required"] for c in checks) else 2
     except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as exc:
         print(json.dumps({"structure": "failed", "ready": False, "reason": str(exc)}))
         return 4

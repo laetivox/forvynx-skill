@@ -19,7 +19,13 @@ python -B scripts/forvynx.py plan --inventory <inventory.json> --selection <sele
 ```
 
 Probe reports bounded metadata discovery, including nested checkouts within the
-scan budget. Default depth is 3 and directory/entry budget is 5,000. An incomplete
+scan budget. Default depth is 3, with independent global budgets of 5,000 visited
+directories and 5,000 raw entries across all directories. `--max-depth`,
+`--max-dirs` and `--max-entries` set these limits. Pending and visited directories
+share the directory budget; files, excluded names and links also consume entries.
+An entry budget fully consumed is conservatively incomplete without a lookahead.
+The report includes `enumerated_entries` and `peak_pending_directories`. These
+limits cover tree discovery, not every Git query or recovery-log read. An incomplete
 inventory can still support an explicitly selected, positively identified checkout;
 it must not be presented as exhaustive. Evidence symlinks, invalid config and
 permission errors do not count as an absent project. No Git initialization occurs.
@@ -52,6 +58,83 @@ shell interpolation. Command definitions are never run during probe or plan.
 list of every code file tested. Review argv, cwd, environment, side effects,
 dependencies, source contents and CI behavior before authorization.
 
+Each check may include a `review` declaration. New plans explicitly supply the
+following unknown values when it is omitted; older configs without it remain
+readable without being rewritten by validation:
+
+```json
+{
+  "dependencies": null,
+  "network": "unknown",
+  "writes": "unknown",
+  "notes": []
+}
+```
+
+All four keys are required in an explicit object; unknown keys are rejected.
+`dependencies: null` means unevaluated. An empty list declares no additional
+prerequisites, while a nonempty list names reviewed prerequisites; neither proves
+that tools are installed. `network` and `writes` accept `none`, `possible` or
+`unknown`. They describe the Agent's review, not a sandbox guarantee or execution
+permission. Dependency and note lists have at most 16 unique, nonempty printable
+single-line strings of at most 800 characters each. Review declarations are bound
+to the same digest as the command and must agree in the plan and repo config.
+Replanning without a new checks list preserves existing declarations.
+
+The plan's `scope.network: false` describes onboarding itself. It is independent
+of possible effects from subsequently authorized engineering checks. Declarations
+do not install prerequisites, authorize networking, or change checkout scope.
+
+### Project-specific workflow proposals
+
+For onboarding that needs project-specific decisions, add an optional `workflow`
+to the selected repository. The Agent proposes the decisions after reading the
+applicable guidance; the controller validates their structure and renders them
+as prose with a fixed template. For example, when `AGENTS.md` requests focused
+standard-library tests and the reviewed `unit` check above is selected:
+
+```json
+{
+  "schema_version": 1,
+  "decisions": [{
+    "id": "focused-validation",
+    "applies_to": "small_change",
+    "guidance": "Run focused standard-library tests for the changed behavior.",
+    "reason": "The repository guidance requests focused tests without new dependencies.",
+    "confidence": "medium",
+    "sources": ["AGENTS.md"],
+    "check_ids": ["unit"]
+  }],
+  "unknowns": ["The available integration-test environment has not been verified."]
+}
+```
+
+All fields shown are required. `applies_to` accepts `all`, `small_change`,
+`substantial_change`, or `cross_repository`; it scopes the recommendation, not
+checkout authorization. `confidence` is the Agent's declared `high`, `medium`,
+or `low` assessment. High/medium proposals need a source; unsupported proposals
+must be low. Unknowns must be stated rather than supplied as invented facts.
+
+Each list is limited to 16 entries. Decision IDs match `[a-z][a-z0-9_-]{0,63}`;
+guidance, reasons and unknowns are nonempty printable single-line text up to
+800 characters. Unknown fields, duplicate IDs/references, and unknown check IDs
+are rejected. `sources` accepts only this checkout's evidence paths reported
+by probe; generated Forvynx components are excluded. This first version does
+not support arbitrary additional evidence paths or module-specific workflows.
+
+The plan binds evidence bytes and the rendered workflow to its digest. A source
+reference proves neither that the recommendation follows from it nor that the
+Agent respected all existing rules. Review those semantic choices with the diff.
+Applicable rules remain authoritative; proposal text never grants execution,
+installation, hook, network, or other-checkout permission. Referenced check IDs
+do not execute checks. Commands remain in the separate reviewed `checks` list.
+
+New onboarding without `workflow` keeps the generic template. Replanning an
+existing adaptive repository without that field preserves its saved decisions;
+an explicit object replaces them through the normal diff. Older repo configs
+without the optional field remain readable. A plan carrying an older checker
+template needs a new plan under the current product baseline.
+
 The plan contains complete base64 write payloads, before/after hashes, human-readable
 diffs, checkout identities, commands, scope flags, and a digest. Machine-local audit
 records/backups are under the OS temporary directory `forvynx-state/<workspace-hash>`;
@@ -71,6 +154,12 @@ python -B scripts/forvynx.py verify --plan <plan.json> --execute <repo-id:check-
 convention; a digest itself is not proof of a human approval. The assistant must
 not fabricate it or use a plan alone as permission. Existing scoped task approval
 may cover normal checks; do not ask again when it already does.
+When a new application journal is created, its approval record includes UTC
+`recorded_at`, the plan scope and selected repository IDs. This is the controller's
+receipt-recording time, not an authenticated human approval time. A `no_change`
+result leaves the original audit bytes and time untouched; rollback keeps that
+record. This receipt concerns the application, not separate check or installation
+authorization.
 
 Required checks not executed keep `ready=false`; an empty check list means only
 the generated workflow is ready, not that business code has been tested. Missing
@@ -80,10 +169,34 @@ spawned children may need host cleanup. Output is discarded to avoid retaining
 secrets or unbounded logs; rerun an authorized failing check in the host terminal
 when its diagnostic output is needed.
 
+Check reports use the same fields across all four statuses: `id`, `key`, `root`,
+`argv`, `cwd`, `required`, `status`, `exit_code`, `duration_ms`, `reason`, `output`,
+`log_ref`, `review` and `definition_sha256`. Arguments show the effective Python
+interpreter and directories are local absolute paths. `key` comes from the plan
+or the portable config's repo ID; the bare helper has no key unless one is given.
+Unselected checks are `not_run`; missing directories/tools or denied process
+startup are `unsupported`. Both have null exit codes and zero execution duration.
+Launched checks report actual duration and completion/failure/timeout reasons.
+Required unsupported checks return exit code 5; required failures return 4, and
+required unselected checks return 2. Index mode remains a structural gate.
+
+`definition_sha256` covers the portable command definition, including the original
+`$PYTHON` token, explicit environment overrides, source path list and effective
+review. It excludes local roots/keys and source bytes; it is not a digest of every
+business input. The controller's plan digest and source preconditions remain the
+binding for reviewed inputs. Portable checks have no local approval plan.
+Output remains `not_recorded`, and `log_ref` is null because no output log exists;
+these fields do not claim a log was archived. Host environment values are not
+repeated in reports.
+
 Verification uses the product's own fixed checker implementation and template
 baseline. Never import/execute a target's checker to perform static verification.
 The target's `.forvynx/check.py` is a portable quality gate for CI, not a proof
 of human approval or an adversarial security boundary.
+For adaptive workflows it checks the data shape and source/check references;
+product verification also reconstructs the rendered Markdown. Portable checks
+confirm that referenced sources exist in the selected snapshot, not that their
+current content still supports a planning-time recommendation.
 
 ## Recovery
 

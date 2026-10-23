@@ -29,6 +29,7 @@ def main(argv=None):
     p.add_argument("--workspace", required=True)
     p.add_argument("--max-depth", type=int, default=3)
     p.add_argument("--max-dirs", type=int, default=5000)
+    p.add_argument("--max-entries", type=int, default=5000)
     p = commands.add_parser("plan")
     p.add_argument("--inventory", required=True)
     p.add_argument("--selection", required=True)
@@ -46,7 +47,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.command == "probe":
-            result = probe(args.workspace, args.max_depth, args.max_dirs)
+            result = probe(args.workspace, args.max_depth, args.max_dirs, args.max_entries)
             code = 0 if result["complete"] else 2
         elif args.command == "plan":
             result = build_plan(read_json(args.inventory), read_json(args.selection))

@@ -58,6 +58,10 @@ skill). The controller uses only the standard library and local Git. Read
 4. Generate a `plan`. Read its complete scope, diff, commands, and state location.
    Preserve existing guidance, dirty work, hooks, and CI. Keep design and workflow
    suggestions proportional to the evidence; no mandatory DDD/TDD/multi-agent stack.
+   Use the optional declarative `workflow` in [workflow.md](references/workflow.md)
+   for project-specific decisions, reasons, source references, declared confidence,
+   task scope, and unknowns. Read the cited evidence; do not treat a valid schema or
+   unchanged source hash as proof that a suggestion is correct or overrides rules.
 5. Before installation, first onboarding, or extending an existing scope, obtain
    explicit user authorization for that concrete plan, unless existing direct
    authorization already covers it. Do useful preparation before asking. A local

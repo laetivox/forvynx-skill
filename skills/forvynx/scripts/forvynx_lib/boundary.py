@@ -137,6 +137,11 @@ def atomic_write(root, relative, data):
         os.replace(name, guarded(root, relative))
     finally:
         if os.path.exists(name):
+            # Preserving a Windows target's mode may leave staging read-only.
+            info = os.lstat(name)
+            if (os.name == "nt" and stat.S_ISREG(info.st_mode)
+                    and not getattr(info, "st_file_attributes", 0) & 0x400):
+                os.chmod(name, stat.S_IREAD | stat.S_IWRITE)
             os.unlink(name)
 
 

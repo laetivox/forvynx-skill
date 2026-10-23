@@ -1,12 +1,15 @@
 """Observable invariants in temporary repositories; never touch real projects."""
 
 import base64
+import difflib
 import json
 import os
+import queue
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -63,6 +66,71 @@ class WorkspaceTest(unittest.TestCase):
 
     def snapshot(self):
         return {str(p.relative_to(self.ws)): p.read_bytes() for p in self.ws.rglob("*") if p.is_file() and ".git" not in p.parts}
+
+    def workflow(self, sources=("AGENTS.md",), check_ids=(), guidance="Use the existing focused checks.",
+                 unknowns=("Tool availability has not been verified.",)):
+        return {"schema_version": 1, "decisions": [{"id": "focused-validation", "applies_to": "small_change",
+                "guidance": guidance, "reason": "The cited project evidence defines the existing convention.",
+                "confidence": "medium", "sources": list(sources), "check_ids": list(check_ids)}],
+                "unknowns": list(unknowns)}
+
+    def tree_bytes(self, root, exclude=()):
+        return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*")
+                if p.is_file() and not any(p.relative_to(root).is_relative_to(name) for name in exclude)}
+
+    def submodule_fixture(self):
+        source = self.repo("source")
+        (source / "library.txt").write_bytes(b"Local-only submodule source\r\n")
+        self.git(source, "add", ".")
+        self.git(source, "commit", "-qm", "submodule source")
+        main = self.repo("main")
+        (main / "README.md").write_bytes(b"Parent repository\n")
+        self.git(main, "add", ".")
+        self.git(main, "commit", "-qm", "parent source")
+        self.git(main, "-c", "protocol.file.allow=always", "submodule", "add", str(source), "module")
+        self.git(main, "commit", "-qam", "local submodule")
+        module = main / "module"
+        metadata = Path(identity(module)["git_dir"])
+        self.assertTrue((module / ".git").is_file())
+        self.assertTrue(metadata.is_relative_to(main / ".git/modules"))
+        self.assertFalse(metadata.is_relative_to(module))
+        return main, module, metadata
+
+    def process_event(self, process):
+        events = queue.Queue()
+        reader = threading.Thread(target=lambda: events.put(process.stdout.readline()), daemon=True)
+        reader.start()
+        try:
+            line = events.get(timeout=20)
+        except queue.Empty:
+            self.fail("Fixture process did not complete its pipe handshake within 20 seconds")
+        self.assertTrue(line, "Fixture process exited before its pipe handshake")
+        return json.loads(line)
+
+    def stop_fixture_process(self, process, message=None):
+        try:
+            output = process.communicate(input=message, timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            output = process.communicate(timeout=15)
+        return output
+
+    def remove_exited_fixture_locks(self, process, value):
+        # Test-only recovery: prove the exact fixture owner exited before unlinking its own locks.
+        self.assertIsNotNone(process.poll())
+        self.assertEqual(Path(value["workspace"]), self.ws)
+        resources = {value["workspace"], *(r["identity"]["root"] for r in value["repositories"])}
+        lock_folder = Path(tempfile.gettempdir()).resolve() / "forvynx-locks"
+        removed = []
+        for resource in resources:
+            self.assertTrue(Path(resource).is_relative_to(self.ws))
+            path = lock_folder / (sha(os.path.normcase(resource).encode()) + ".lock")
+            self.assertEqual(path.resolve().parent, lock_folder)
+            if path.exists():
+                self.assertEqual(path.read_text(), str(process.pid))
+                path.unlink()
+                removed.append(path)
+        return removed
 
     def test_empty_workspace_probe_is_read_only(self):
         before = self.snapshot()
@@ -197,6 +265,31 @@ class WorkspaceTest(unittest.TestCase):
         self.assertEqual((root / ".git/config").read_bytes(), before)
         self.assertFalse((root / ".forvynx").exists())
 
+    def test_real_submodule_parent_onboarding_preserves_child_and_modules_metadata(self):
+        main, module, metadata = self.submodule_fixture()
+        value = self.plan(("main",))
+        module_before, metadata_before = self.tree_bytes(module), self.tree_bytes(metadata)
+        self.assertEqual([r["identity"]["root"] for r in value["repositories"]], [str(main)])
+        self.assertEqual(apply_plan(value, value["digest"])["status"], "applied")
+        self.assertEqual(self.tree_bytes(module), module_before)
+        self.assertEqual(self.tree_bytes(metadata), metadata_before)
+        self.assertFalse((module / ".forvynx").exists())
+        self.assertEqual(verify(value)["structure"], "passed")
+
+    def test_real_submodule_child_onboarding_preserves_unselected_parent(self):
+        main, module, metadata = self.submodule_fixture()
+        value = self.plan(("main/module",))
+        main_before = self.tree_bytes(main, exclude=("module",))
+        module_pointer, metadata_before = (module / ".git").read_bytes(), self.tree_bytes(metadata)
+        self.assertEqual([r["identity"]["root"] for r in value["repositories"]], [str(module)])
+        self.assertEqual(apply_plan(value, value["digest"])["status"], "applied")
+        self.assertEqual(self.tree_bytes(main, exclude=("module",)), main_before)
+        self.assertEqual((module / ".git").read_bytes(), module_pointer)
+        self.assertEqual(self.tree_bytes(metadata), metadata_before)
+        self.assertFalse((main / ".forvynx").exists())
+        self.assertFalse((main / "AGENTS.md").exists())
+        self.assertEqual(verify(value)["structure"], "passed")
+
     def test_recovery_preserves_subsequent_edit(self):
         root = self.repo()
         value = self.plan()
@@ -243,6 +336,100 @@ class WorkspaceTest(unittest.TestCase):
                 with resource_locks(b):
                     self.fail("Both transactions acquired workspace lock")
 
+    def test_independent_process_lock_blocks_apply_without_target_writes_then_releases(self):
+        self.repo()
+        value = self.plan()
+        plan_path = self.ws / "process-plan.json"
+        plan_path.write_bytes(json_bytes(value))
+        script = ("import json,os,sys;from pathlib import Path;"
+                  "sys.path.insert(0,sys.argv[1]);from forvynx_lib.apply import resource_locks;"
+                  "value=json.loads(Path(sys.argv[2]).read_bytes());\n"
+                  "with resource_locks(value):\n"
+                  " print(json.dumps({'status':'held','pid':os.getpid()}),flush=True)\n"
+                  " assert sys.stdin.readline().strip()=='release'\n")
+        process = subprocess.Popen([sys.executable, "-B", "-c", script, str(CLI.parent), str(plan_path)],
+                                   env=self.git_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            self.assertEqual(self.process_event(process), {"status": "held", "pid": process.pid})
+            before = self.snapshot()
+            denied = subprocess.run([sys.executable, "-B", str(CLI), "apply", "--plan", str(plan_path),
+                                     "--confirm", value["digest"]], env=self.git_env, timeout=30,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            report = json.loads(denied.stdout)
+            self.assertNotEqual(denied.returncode, 0, denied.stdout)
+            self.assertEqual(report["status"], "blocked")
+            self.assertIn("Resource locked", report["reason"])
+            self.assertEqual(self.snapshot(), before)
+            self.assertFalse(state_directory(self.ws).exists())
+            stdout, stderr = self.stop_fixture_process(process, b"release\n")
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+            applied = subprocess.run([sys.executable, "-B", str(CLI), "apply", "--plan", str(plan_path),
+                                      "--confirm", value["digest"]], env=self.git_env, timeout=30,
+                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertEqual(applied.returncode, 0, applied.stdout + applied.stderr)
+            self.assertEqual(json.loads(applied.stdout)["status"], "applied")
+        finally:
+            self.stop_fixture_process(process)
+            self.remove_exited_fixture_locks(process, value)
+
+    def test_independent_process_exit_leaves_recovery_and_rollback_preserves_later_edit(self):
+        self.repo()
+        value = self.plan()
+        plan_path = self.ws / "crash-plan.json"
+        plan_path.write_bytes(json_bytes(value))
+        before = self.snapshot()
+        script = ("import json,os,sys;from pathlib import Path;"
+                  "sys.path.insert(0,sys.argv[1]);from forvynx_lib.apply import apply_plan;"
+                  "from forvynx_lib.boundary import atomic_write;"
+                  "value=json.loads(Path(sys.argv[2]).read_bytes());\n"
+                  "def crash_after_write(root,name,data):\n"
+                  " atomic_write(root,name,data)\n"
+                  " print(json.dumps({'status':'wrote','pid':os.getpid(),'root':str(root),'path':name}),flush=True)\n"
+                  " os._exit(73)\n"
+                  "apply_plan(value,value['digest'],writer=crash_after_write)\n")
+        process = subprocess.Popen([sys.executable, "-B", "-c", script, str(CLI.parent), str(plan_path)],
+                                   env=self.git_env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            stdout, stderr = self.stop_fixture_process(process)
+            self.assertEqual(process.returncode, 73, stdout + stderr)
+            event = json.loads(stdout)
+            first = value["actions"][0]
+            self.assertEqual(event, {"status": "wrote", "pid": process.pid,
+                                    "root": first["root"], "path": first["path"]})
+            folder, name = journal_path(value)
+            journal = json.loads((folder / name).read_bytes())
+            self.assertEqual(journal["status"], "applying")
+            self.assertEqual(journal["completed"], [])
+            self.assertEqual(journal["attempting"], {"root": first["root"], "path": first["path"]})
+            self.assertEqual(probe(self.ws)["recovery"], [{"journal": str(folder / name), "status": "applying"}])
+            after_crash = self.snapshot()
+            changed = {path for path in before.keys() | after_crash.keys() if before.get(path) != after_crash.get(path)}
+            written = Path(first["root"]) / first["path"]
+            self.assertEqual(changed, {str(written.relative_to(self.ws))})
+            denied = subprocess.run([sys.executable, "-B", str(CLI), "apply", "--plan", str(plan_path),
+                                     "--confirm", value["digest"]], env=self.git_env, timeout=30,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.assertNotEqual(denied.returncode, 0, denied.stdout)
+            self.assertEqual(json.loads(denied.stdout)["status"], "blocked")
+            self.assertEqual(self.snapshot(), after_crash)
+            # The child is reaped above; this only clears locks naming its PID in this fixture.
+            self.assertEqual(len(self.remove_exited_fixture_locks(process, value)), 2)
+            with self.assertRaises(ForvynxError):
+                apply_plan(value, value["digest"])
+            self.assertEqual(self.snapshot(), after_crash)
+            later = b"Later user edit after the fixture process exited\n"
+            written.write_bytes(later)
+            before_recovery = self.snapshot()
+            recovered = rollback(value, value["digest"])
+            self.assertEqual(recovered["status"], "conflict")
+            self.assertEqual(written.read_bytes(), later)
+            self.assertEqual(recovered["conflicts"], [{"path": str(written), "reason": "subsequent edit preserved"}])
+            self.assertEqual(self.snapshot(), before_recovery)
+            self.assertEqual(probe(self.ws)["recovery"][0]["status"], "conflict")
+        finally:
+            self.stop_fixture_process(process)
+            self.remove_exited_fixture_locks(process, value)
+
     def test_discovery_does_not_execute_package_scripts(self):
         root = self.repo()
         sentinel = root / "SENTINEL"
@@ -251,6 +438,198 @@ class WorkspaceTest(unittest.TestCase):
         apply_plan(value, value["digest"])
         verify(value)
         self.assertFalse(sentinel.exists())
+
+    def test_adaptive_workflows_reflect_distinct_evidence_without_execution(self):
+        python_root = self.repo("a")
+        generic_root = self.repo("b")
+        original = b"# Existing rules\r\nUse unittest; do not add dependencies.\r\n"
+        (python_root / "AGENTS.md").write_bytes(original)
+        (python_root / "pyproject.toml").write_text('[project]\nname="stdlib-app"\nversion="0.0.0"\n', encoding="utf-8")
+        (python_root / "entry.py").write_text("from pathlib import Path;Path('SENTINEL').write_text('executed')", encoding="utf-8")
+        (generic_root / "AGENTS.md").write_text("Preserve the existing manual acceptance procedure.\n", encoding="utf-8")
+        (generic_root / "package.json").write_text(json.dumps({"scripts": {"test": "echo executed > SENTINEL"}}), encoding="utf-8")
+        workflows = [self.workflow(check_ids=("unit",), guidance="Use unittest for focused Python changes."),
+                     self.workflow(sources=("AGENTS.md", "package.json"), guidance="Follow the existing manual acceptance procedure.",
+                                   unknowns=("The package test command has not been reviewed or executed.",))]
+        selection = {"repositories": [
+            {"path": "a", "workflow": workflows[0], "checks": [{"id": "unit", "argv": ["$PYTHON", "entry.py"], "sources": ["entry.py"]}]},
+            {"path": "b", "workflow": workflows[1]}]}
+        before = self.snapshot()
+        value = build_plan(probe(self.ws), selection)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(apply_plan(value, value["digest"])["status"], "applied")
+        rendered = [(root / ".forvynx/workflow.md").read_text(encoding="utf-8") for root in (python_root, generic_root)]
+        self.assertNotEqual(rendered[0], rendered[1])
+        for root, declared, text in zip((python_root, generic_root), workflows, rendered):
+            self.assertEqual(json.loads((root / ".forvynx/repo.json").read_bytes())["workflow"], declared)
+            self.assertIn(declared["decisions"][0]["guidance"], text)
+            self.assertIn(declared["unknowns"][0], text)
+            self.assertIn("AGENTS.md", text)
+            self.assertFalse((root / "SENTINEL").exists())
+        self.assertTrue((python_root / "AGENTS.md").read_bytes().startswith(original))
+        self.assertEqual({repo["profile"] for repo in value["repositories"]}, {"python", "generic"})
+        report = verify(value)
+        self.assertFalse(report["ready"])
+        self.assertEqual(report["checks"][0]["status"], "not_run")
+        generic_plan = self.plan(("b",))
+        self.assertEqual(verify(generic_plan)["engineering_verification"], "not_configured")
+        self.assertFalse((python_root / "SENTINEL").exists())
+        self.assertFalse((generic_root / "SENTINEL").exists())
+
+    def test_adaptive_workflow_rejects_invalid_data_and_references(self):
+        root = self.repo()
+        (root / "AGENTS.md").write_text("Use existing checks.\n", encoding="utf-8")
+        (root / "untracked.txt").write_text("Not discovered engineering evidence.", encoding="utf-8")
+        invalid = []
+        for field, value in (("schema_version", 2), ("schema_version", True), ("unknowns", ["unknown"] * 17),
+                             ("authorization", "approved")):
+            data = self.workflow()
+            data[field] = value
+            invalid.append((field + repr(value), data))
+        for field, value in (("id", "Invalid"), ("applies_to", "always_execute"), ("confidence", "verified"),
+                             ("guidance", "line one\nline two"), ("reason", "x" * 801),
+                             ("sources", ["../outside.txt"]), ("sources", ["untracked.txt"]),
+                             ("sources", ["missing.toml"]), ("sources", [".forvynx/repo.json"]),
+                             ("sources", []), ("sources", ["AGENTS.md", "AGENTS.md"]),
+                             ("check_ids", ["missing-check"]), ("check_ids", ["unit", "unit"]), ("approved", True)):
+            data = self.workflow()
+            data["decisions"][0][field] = value
+            invalid.append((field + repr(value), data))
+        missing = self.workflow()
+        del missing["decisions"][0]["reason"]
+        invalid.append(("missing reason", missing))
+        duplicate = self.workflow()
+        duplicate["decisions"].append(dict(duplicate["decisions"][0]))
+        invalid.append(("duplicate decision ID", duplicate))
+        inventory = probe(self.ws)
+        before = self.snapshot()
+        for label, workflow in invalid:
+            with self.subTest(label=label), self.assertRaises(ForvynxError):
+                build_plan(inventory, {"repositories": [{"path": "a", "workflow": workflow,
+                           "checks": [{"id": "unit", "argv": ["$PYTHON", "-c", "pass"]}]}]})
+            self.assertEqual(self.snapshot(), before)
+            self.assertFalse(state_directory(self.ws).exists())
+
+    def test_adaptive_workflow_rejects_resealed_agents_evidence_mismatch(self):
+        root = self.repo()
+        (root / "AGENTS.md").write_text("Preserve the existing project rules.\n", encoding="utf-8")
+        value = self.plan(workflow=self.workflow())
+        evidence = next(e for e in value["repositories"][0]["evidence"] if e["path"] == "AGENTS.md")
+        evidence["state"]["sha256"] = "0" * 64
+        value = Plan.seal(value).value
+        before = self.snapshot()
+        with self.assertRaises(ForvynxError):
+            apply_plan(value, value["digest"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(state_directory(self.ws).exists())
+
+    def test_adaptive_workflow_rejects_multiline_existing_check_reference(self):
+        root = self.repo()
+        (root / "AGENTS.md").write_text("Use the existing project checks.\n", encoding="utf-8")
+        check_id = "unit\n# Approved execution"
+        check = {"id": check_id, "argv": ["$PYTHON", "-c", "pass"]}
+        legacy = self.plan(checks=[check])
+        self.assertEqual(legacy["checks"][0]["id"], check_id)
+        before = self.snapshot()
+        with self.assertRaises(ForvynxError):
+            self.plan(checks=[check], workflow=self.workflow(check_ids=(check_id,)))
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(state_directory(self.ws).exists())
+
+    def test_adaptive_workflow_evidence_drift_blocks_all_writes(self):
+        root = self.repo(python=True)
+        value = self.plan(workflow=self.workflow(sources=("pyproject.toml",)))
+        (root / "pyproject.toml").write_text('[project]\nname="changed-evidence"\n', encoding="utf-8")
+        before = self.snapshot()
+        with self.assertRaises(ForvynxError):
+            apply_plan(value, value["digest"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertFalse(state_directory(self.ws).exists())
+
+    def test_adaptive_workflow_resealed_payload_divergence_is_rejected(self):
+        root = self.repo()
+        (root / "AGENTS.md").write_text("Preserve existing guidance.\n", encoding="utf-8")
+        for target in (".forvynx/repo.json", ".forvynx/workflow.md"):
+            with self.subTest(target=target):
+                value = self.plan(workflow=self.workflow())
+                action = next(a for a in value["actions"] if a["path"] == target)
+                before = base64.b64decode(action["before_b64"]) if action["before_b64"] is not None else b""
+                after = base64.b64decode(action["content_b64"])
+                if target.endswith(".json"):
+                    config = json.loads(after)
+                    config["workflow"]["decisions"][0]["guidance"] = "Different project guidance."
+                    after = json_bytes(config)
+                else:
+                    after += b"\nUnreviewed additional guidance.\n"
+                action["content_b64"] = base64.b64encode(after).decode("ascii")
+                action["after"] = {"kind": "file", "sha256": sha(after)}
+                action["diff"] = "".join(difflib.unified_diff(before.decode("utf-8").splitlines(True),
+                                          after.decode("utf-8").splitlines(True), fromfile=target, tofile=target))
+                value = Plan.seal(value).value
+                snapshot = self.snapshot()
+                with self.assertRaises(ForvynxError):
+                    apply_plan(value, value["digest"])
+                self.assertEqual(self.snapshot(), snapshot)
+                self.assertFalse(state_directory(self.ws).exists())
+
+    def test_adaptive_workflow_is_retained_when_selection_omits_it(self):
+        root = self.repo()
+        (root / "AGENTS.md").write_text("Keep the existing rules and use focused checks.\n", encoding="utf-8")
+        declared = self.workflow()
+        first = self.plan(workflow=declared)
+        apply_plan(first, first["digest"])
+        before = self.snapshot()
+        second = self.plan()
+        config_action = next(a for a in second["actions"] if a["path"] == ".forvynx/repo.json")
+        self.assertEqual(json.loads(base64.b64decode(config_action["content_b64"]))["workflow"], declared)
+        self.assertEqual(apply_plan(second, second["digest"])["status"], "no_change")
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(verify(second)["structure"], "passed")
+
+    def test_adaptive_workflow_index_requires_sources_from_same_snapshot(self):
+        root = self.repo(python=True)
+        value = self.plan(workflow=self.workflow(sources=("pyproject.toml",)))
+        apply_plan(value, value["digest"])
+        self.git(root, "add", "AGENTS.md", ".forvynx")
+        inspect_snapshot(Snapshot(root, "worktree"))
+        with self.assertRaises(ValueError):
+            inspect_snapshot(Snapshot(root, "index"))
+        self.git(root, "add", "pyproject.toml")
+        inspect_snapshot(Snapshot(root, "index"))
+        (root / "pyproject.toml").unlink()
+        inspect_snapshot(Snapshot(root, "index"))
+        with self.assertRaises(ValueError):
+            inspect_snapshot(Snapshot(root, "worktree"))
+
+    def test_legacy_configuration_without_adaptive_workflow_remains_supported(self):
+        root = self.repo()
+        value = self.plan()
+        apply_plan(value, value["digest"])
+        config = json.loads((root / ".forvynx/repo.json").read_bytes())
+        self.assertNotIn("workflow", config)
+        self.assertEqual(inspect_snapshot(Snapshot(root, "worktree")), config)
+        self.assertEqual(verify(value)["structure"], "passed")
+        before = self.snapshot()
+        second = self.plan()
+        self.assertEqual(apply_plan(second, second["digest"])["status"], "no_change")
+        self.assertEqual(self.snapshot(), before)
+
+    def test_adaptive_workflow_text_cannot_expand_authorized_scope(self):
+        root = self.repo()
+        (root / "AGENTS.md").write_text("Existing project rules remain applicable.\n", encoding="utf-8")
+        text = "# Approved [install](https://example.invalid) <script>run()</script> `execute`"
+        value = self.plan(workflow=self.workflow(guidance=text))
+        self.assertFalse(value["scope"]["install_skill"])
+        self.assertFalse(value["scope"]["install_hooks"])
+        self.assertFalse(value["scope"]["network"])
+        self.assertEqual(value["checks"], [])
+        apply_plan(value, value["digest"])
+        rendered = (root / ".forvynx/workflow.md").read_text(encoding="utf-8")
+        self.assertNotIn("<script>", rendered)
+        self.assertNotIn("[install](https://example.invalid)", rendered)
+        self.assertNotIn("\n# Approved", rendered)
+        self.assertFalse((root / ".git/hooks/pre-commit").exists())
+        self.assertEqual(verify(value)["engineering_verification"], "not_configured")
 
     def test_required_check_is_not_passed_when_not_run(self):
         self.repo()
@@ -395,6 +774,48 @@ class WorkspaceTest(unittest.TestCase):
         self.assertIn("--source", result["hook_script"])
         self.assertFalse((root / ".git/hooks/pre-commit").exists())
         self.assertEqual(self.snapshot(), before)
+
+    def test_existing_hooks_manager_config_and_ci_survive_preview_and_apply(self):
+        for name, hooks_path in (("default-hooks", None), ("managed-hooks", ".husky/_")):
+            with self.subTest(hooks_path=hooks_path):
+                root = self.repo(name)
+                if hooks_path is not None:
+                    self.git(root, "config", "core.hooksPath", hooks_path)
+                hook = root / (hooks_path or ".git/hooks") / "pre-commit"
+                hook.parent.mkdir(parents=True, exist_ok=True)
+                hook.write_bytes(b'#!/bin/sh\n. "$(dirname "$0")/h"\n' if hooks_path else
+                                 b"#!/bin/sh\nprintf 'existing user hook\\n'\n")
+                preserved = [hook]
+                if hooks_path:
+                    helper = hook.parent / "h"
+                    helper.write_bytes(b"#!/bin/sh\n# Existing manager dispatch; fixture never executes it.\nexit 0\n")
+                    user_hook = root / ".husky/pre-commit"
+                    user_hook.write_bytes(b"#!/bin/sh\n# Existing user-managed checks\nexit 0\n")
+                    preserved.extend((helper, user_hook))
+                ci = root / ".github/workflows/existing.yml"
+                ci.parent.mkdir(parents=True)
+                ci.write_bytes(b"name: Existing CI\r\non: [push]\r\njobs: {}\r\n")
+                other_ci = root / ".gitlab-ci.yml"
+                other_ci.write_bytes(b"stages: [existing]\n")
+                preserved.extend((ci, other_ci, root / ".git/config"))
+                original = {p: p.read_bytes() for p in preserved}
+                value = self.plan((name,), ci=True)
+                before = self.snapshot()
+                preview = preview_hook(value, value["repositories"][0]["repo_id"])
+                self.assertEqual(preview["status"], "preview_only")
+                self.assertTrue(preview["existing_hook"])
+                self.assertEqual(preview["core_hooks_path"], hooks_path)
+                self.assertEqual(Path(preview["active_hook_path"]).resolve(), hook.resolve())
+                self.assertEqual(self.snapshot(), before)
+                self.assertFalse(Path(preview["checker_snapshot_path"]).exists())
+                self.assertEqual({p: p.read_bytes() for p in preserved}, original)
+                self.assertEqual(apply_plan(value, value["digest"])["status"], "applied")
+                self.assertEqual({p: p.read_bytes() for p in preserved}, original)
+                self.assertTrue((root / ".github/workflows/forvynx.yml").is_file())
+                self.assertFalse(Path(preview["checker_snapshot_path"]).exists())
+                report = verify(value)
+                self.assertEqual(report["structure"], "passed")
+                self.assertEqual(report["ci_execution"], "not_run")
 
     def test_active_alternate_index_is_used(self):
         root = self.repo()

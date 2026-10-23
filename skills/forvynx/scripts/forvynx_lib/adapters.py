@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .boundary import read_bytes
 from .domain import ForvynxError, sha
+from .portable import validate_workflow
 
 EVIDENCE_FILES = (
     "AGENTS.md", "pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini", "ruff.toml",
@@ -46,8 +47,8 @@ def inspect_repo(root):
             "notes": ["No scripts or dependencies executed; suggestions require review."]}
 
 
-def workflow(profile):
-    return ("# AI coding workflow\n\n"
+def workflow(profile, proposal=None, check_ids=()):
+    base = ("# AI coding workflow\n\n"
             "Read the applicable engineering guidance and task-relevant files.\n"
             "For substantial features or structural changes, agree on goals, boundaries,\n"
             "interfaces, tradeoffs, and acceptance criteria before implementation.\n"
@@ -57,4 +58,32 @@ def workflow(profile):
             "Report checks as passed, failed, not_run, or unsupported; skipped required\n"
             "checks are not success. Multi-repository changes need per-checkout results.\n\n"
             f"Detected profile: {profile}. Use the reviewed commands in repo.json;\n"
-            "discovery does not authorize their execution.\n").encode("utf-8")
+            "discovery does not authorize their execution.\n")
+    if proposal is None:
+        return base.encode("utf-8")
+    validate_workflow(proposal, check_ids)
+
+    def quoted(text):
+        # Free text stays prose, including strings that resemble Markdown/HTML.
+        text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        for char in ("\\", "`", "*", "_", "{", "}", "[", "]", "#", "|"):
+            text = text.replace(char, "\\" + char)
+        return text
+
+    lines = [base, "## Project proposals\n",
+             "These are Agent-proposed decisions. Applicable repository rules remain authoritative.",
+             "Declared confidence is the Agent's assessment; source references do not prove",
+             "that a recommendation is correct. Text here grants no command execution,",
+             "installation, hook, network, or additional checkout authorization.\n"]
+    for decision in proposal["decisions"]:
+        lines.extend((f"### {decision['id']} ({decision['applies_to']})\n",
+                      quoted(decision["guidance"]),
+                      "Reason: " + quoted(decision["reason"]),
+                      "Agent-declared confidence: " + decision["confidence"],
+                      "Sources (planning-time evidence): " + (", ".join(quoted(s) for s in decision["sources"]) or "none; unsupported proposal"),
+                      "Reviewed check references: " + (", ".join(quoted(s) for s in decision["check_ids"]) or "none") + "\n"))
+    lines.append("## Unknowns\n")
+    lines.extend("- " + quoted(u) for u in proposal["unknowns"])
+    if not proposal["unknowns"]:
+        lines.append("No unknowns were supplied; this is not proof of complete discovery.")
+    return ("\n".join(lines) + "\n").encode("utf-8")

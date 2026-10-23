@@ -3,7 +3,7 @@
 from .boundary import read_bytes, state
 from .domain import ForvynxError, Plan, content_state, decode
 from .plan import CHECKER, validate_boundaries
-from .portable import Snapshot, inspect_snapshot, run_check
+from .portable import Snapshot, check_result, inspect_snapshot, run_check
 
 
 def verify(value, execute=(), confirmation=None):
@@ -29,7 +29,7 @@ def verify(value, execute=(), confirmation=None):
     checks = []
     for check in value["checks"]:
         if check["key"] not in selected:
-            checks.append({"key": check["key"], "required": check["required"], "status": "not_run"})
+            checks.append(check_result(check["root"], check))
             continue
         for source in check["source_states"]:
             expected = source["state"]
